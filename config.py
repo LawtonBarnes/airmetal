@@ -37,7 +37,6 @@ DEFAULTS = {
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
-        "ride_sec": "120",
     },
 }
 
@@ -55,5 +54,4 @@ def load():
         "poll_sec": cp.getfloat("feed", "poll_sec"),
         "fov_deg": cp.getfloat("view", "fov_deg"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
-        "ride_sec": cp.getfloat("view", "ride_sec"),
     }

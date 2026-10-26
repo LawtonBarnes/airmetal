@@ -18,7 +18,7 @@ from collections import deque
 import feed as feedmod
 from geo import FPM, KT, Projection, wrap_deg
 
-MAX_EXTRAPOLATE_SEC = 12.0  # dead-reckon past the newest report at most this long
+MAX_EXTRAPOLATE_SEC = 20.0  # dead-reckon past the newest report at most this long (rides through dropouts)
 STALE_SEC = 20.0  # no position for this long: the track can't be ridden
 FORGET_SEC = 90.0  # ...and this long: dropped entirely
 HISTORY_SEC = 60.0
@@ -76,6 +76,15 @@ class Track:
     @property
     def last_t(self):
         return self.reports[-1][0] if self.reports else 0.0
+
+    def max_gap(self, now, window=30.0):
+        """Longest stretch without a position report over the last `window`
+        seconds (up to now) -- how spotty this aircraft's reception is."""
+        times = [r[0] for r in self.reports if r[0] > now - window]
+        if not times:
+            return window
+        gaps = [b - a for a, b in zip(times, times[1:])] + [now - times[-1], times[0] - (now - window)]
+        return max(gaps)
 
     def state_at(self, t):
         """-> (x, z, msl_m, vx, vz, vy, track_deg, turn_dps) at time t, or

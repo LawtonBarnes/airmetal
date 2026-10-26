@@ -43,6 +43,7 @@ if not ARGS.window or ARGS.headless:
 
 import pygame  # noqa: E402
 
+import director as directormod  # noqa: E402
 import feed as feedmod  # noqa: E402
 import flight  # noqa: E402
 import output  # noqa: E402
@@ -55,7 +56,6 @@ from geo import M_PER_NM  # noqa: E402
 # Metal Shop, panning slowly from White Rock Lake toward downtown.
 STANDBY_CAM = {"alt_m": 122.0, "pitch": -6.0, "heading0": 252.0, "pan_deg": 25.0, "pan_sec": 60.0}
 HANDOFF_SEC = 6.0
-MAX_PICK_ALT_FT = 25000  # higher than this, there's not much to see but haze
 
 
 class App:
@@ -78,9 +78,8 @@ class App:
             self.feed = feedmod.LiveFeed(self.s["feed_url"], self.s["poll_sec"])
         self.traffic = flight.Traffic(self.s["lat"], self.s["lon"])
         self.cam = flight.Camera(self.s["ground_msl_m"])
+        self.director = directormod.Director()
         self.riding = None  # hex of the aircraft being ridden
-        self.ride_start = 0.0
-        self.recent = {}  # hex -> when we last stopped riding it
         self.handoff_until = 0.0
         self.f_card_big = pygame.font.Font(config.FONT_PATH, 30)
         self.f_card = pygame.font.Font(config.FONT_PATH, 20)
@@ -91,37 +90,14 @@ class App:
 
     # -- choosing an aircraft ----------------------------------------------
 
-    def candidates(self, now):
-        t = now - self.s["delay_sec"]
-        out = []
-        for tr in self.traffic.rideable(now):
-            st = tr.state_at(t)
-            if st is None or tr.info.alt_baro_ft is not None and tr.info.alt_baro_ft > MAX_PICK_ALT_FT:
-                continue
-            dist = math.hypot(st[0], st[1])
-            out.append((dist + 20000 * (tr.hex in self.recent), tr.hex))
-        return sorted(out)
+    def pick(self, now, step):
+        """Remote Left/Right: previous/next aircraft in the director's ranking."""
+        self._switched_to(self.director.step(self.traffic, now, now - self.s["delay_sec"], step))
 
-    def pick(self, now, step=0):
-        """Ride the best candidate (step=0), or the next/previous one in
-        that order relative to the current one (remote Left/Right)."""
-        cands = [h for _, h in self.candidates(now)]
-        if not cands:
-            self._ride(None, now)
-            return
-        if step and self.riding in cands:
-            i = (cands.index(self.riding) + step) % len(cands)
-            self._ride(cands[i], now)
-        else:
-            self._ride(cands[0], now)
-
-    def _ride(self, hex_, now):
+    def _switched_to(self, hex_):
         if hex_ == self.riding:
             return
-        if self.riding:
-            self.recent[self.riding] = now
         self.riding = hex_
-        self.ride_start = now
         self.cam.reset()
         if hex_:
             self.handoff_until = time.time() + HANDOFF_SEC
@@ -134,14 +110,10 @@ class App:
         if reports:
             self.last_report_wall = time.time()
         self.traffic.update(reports, now)
-        for h in [h for h, t in self.recent.items() if t < now - 600]:
-            del self.recent[h]
+        t_view = now - self.s["delay_sec"]
+        self._switched_to(self.director.update(self.traffic, now, t_view))
         track = self.traffic.tracks.get(self.riding) if self.riding else None
-        state = track.state_at(now - self.s["delay_sec"]) if track else None
-        if state is None or now - self.ride_start > self.s["ride_sec"]:
-            self.pick(now)
-            track = self.traffic.tracks.get(self.riding) if self.riding else None
-            state = track.state_at(now - self.s["delay_sec"]) if track else None
+        state = track.state_at(t_view) if track else None
         if state is not None:
             self.cam.follow(state, dt)
             return track
