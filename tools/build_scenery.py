@@ -9,7 +9,10 @@ point. This converts it to meters and thins it:
   * every line feature simplified (Ramer-Douglas-Peucker) to LINE_TOL_M,
     then split into segments;
   * lake outlines simplified to LAKE_TOL_M, islands dropped, and lakes
-    smaller than MIN_LAKE_M2 dropped.
+    smaller than MIN_LAKE_M2 dropped;
+  * river/canal stretches that run through a lake removed (OSM keeps the
+    old channel through reservoirs like White Rock Lake, which drew as a
+    line across the water).
 
 Usage: python tools/build_scenery.py [BASEMAP.json.gz]
 (default: the basemap in data/ matching settings' location)
@@ -101,6 +104,41 @@ def chain(parts):
     return out
 
 
+def in_lakes(pts, rings):
+    """Bool per point: inside any lake ring (even-odd ray casting)."""
+    inside = np.zeros(len(pts), bool)
+    for ring in rings:
+        lo, hi = ring.min(0), ring.max(0)
+        cand = np.nonzero((pts[:, 0] >= lo[0]) & (pts[:, 0] <= hi[0]) & (pts[:, 1] >= lo[1]) & (pts[:, 1] <= hi[1]))[0]
+        if not len(cand):
+            continue
+        x, y = pts[cand, 0], pts[cand, 1]
+        hit = np.zeros(len(cand), bool)
+        for (x1, y1), (x2, y2) in zip(ring, np.roll(ring, -1, axis=0)):
+            crosses = (y1 > y) != (y2 > y)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                xc = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+            hit ^= crosses & (x < xc)
+        inside[cand] |= hit
+    return inside
+
+
+def outside_lakes(line, rings):
+    """Splits a polyline into the runs of segments whose midpoints aren't in a lake."""
+    mids = (line[:-1] + line[1:]) / 2
+    wet = in_lakes(mids, rings)
+    runs, start = [], None
+    for i, w in enumerate(wet):
+        if not w and start is None:
+            start = i
+        elif w and start is not None:
+            runs.append(line[start:i + 1])
+            start = None
+    if start is not None:
+        runs.append(line[start:])
+    return runs
+
+
 def area(ring):
     x, y = ring[:, 0], ring[:, 1]
     return 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
@@ -118,7 +156,8 @@ def main():
         raw = json.load(f)
     q = float(raw.get("quant", 1000))
     out = {}
-    for name, packed in raw["layers"].items():
+    lake_rings = []
+    for name, packed in sorted(raw["layers"].items(), key=lambda kv: kv[0] != "lake"):  # lakes first
         coords = (_int32(packed["coords"]).reshape(-1, 2) / q * M_PER_NM).astype(np.float64)
         offsets = _int32(packed["offsets"]).astype(np.int64)
         if name == "lake":
@@ -133,6 +172,7 @@ def main():
                 ring = rdp(ring, LAKE_TOL_M)
                 if len(ring) >= 4:
                     pts.append(ring)
+                    lake_rings.append(ring)
                     starts.append(starts[-1] + len(ring))
             out["lake_pts"] = np.concatenate(pts).astype(np.float32)
             out["lake_starts"] = np.array(starts, np.int64)
@@ -141,6 +181,8 @@ def main():
             parts = [coords[offsets[i]:offsets[i + 1]] for i in range(len(offsets) - 1)]
             tol = LINE_TOL_OVERRIDE_M.get(name, LINE_TOL_M)
             lines = [rdp(line, tol) for line in chain(parts)]
+            if name in ("river", "canal"):
+                lines = [run for line in lines for run in outside_lakes(line, lake_rings)]
             lines = [line for line in lines if len(line) >= 2]
             out[f"lines_{name}_pts"] = np.concatenate(lines).astype(np.float32)
             out[f"lines_{name}_starts"] = np.cumsum([0] + [len(line) for line in lines]).astype(np.int64)

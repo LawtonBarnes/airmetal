@@ -18,21 +18,23 @@ CELL_M = 2000.0
 GRID_HALF = 56  # cells each side of the origin: +-112 km covers the 60 NM basemap
 CHUNK_POINTS = 12  # max points per drawn chunk
 
+WATER_COLOR = (52, 92, 172)  # lakes, rivers and canals alike
+
 # Line layers: (color, width px at 512x192, draw distance m). Draw order is
 # this order -- rivers under roads, big roads last so they win at crossings.
 LINE_STYLES = {
-    "river": ((70, 110, 190), 2, 12000),
-    "canal": ((70, 110, 190), 1, 6000),
+    "river": (WATER_COLOR, 2, 12000),
+    "canal": (WATER_COLOR, 1, 6000),
     "tertiary": ((128, 128, 120), 1, 2500),
     "secondary": ((138, 138, 130), 1, 4500),
-    "rail": ((105, 85, 75), 1, 8000),
+    "rail": ((132, 114, 102), 1, 8000),
     "taxiway": ((95, 95, 90), 1, 4000),
     "primary": ((150, 150, 142), 1, 10000),
     "trunk": ((165, 165, 158), 2, 20000),
     "motorway": ((175, 175, 168), 2, 25000),
     "runway": ((85, 85, 85), 3, 30000),
 }
-LAKE_COLOR = (52, 92, 172)
+LAKE_COLOR = WATER_COLOR
 LAKE_DISTANCE_M = 40000
 
 
