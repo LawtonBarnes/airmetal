@@ -49,14 +49,19 @@ def _rgb(c):
     return tuple(int(v) for v in c)
 
 
-def _style_table():
-    styles = list(sc.LINE_STYLES.values())
-    colors = [[tuple(int(v) for v in hazed(c, (k + 0.5) / 4 * d)) for k in range(4)] for c, _, d in styles]
-    return colors, np.array([w for _, w, _ in styles]), np.array([d for _, _, d in styles], np.float32)
+def feature_colors(base, slant, horiz, max_dist):
+    """Colors for ground features (N, 3 base) seen `slant` meters away along
+    the line of sight -- the same haze the ground behind them gets -- and
+    blended into that hazed ground as `horiz` (the horizontal distance)
+    nears the feature's draw distance, so it fades out instead of popping."""
+    fade = np.clip(horiz / max_dist, 0, 1)[:, None] ** 2
+    own, ground = hazed(base, slant), hazed(GROUND_NEAR, slant)
+    return (own * (1 - fade) + ground * fade).astype(int).tolist()
 
 
-STYLE_COLORS, STYLE_WIDTH, STYLE_DIST = _style_table()
-LAKE_COLORS = [_rgb(hazed(sc.LAKE_COLOR, (k + 0.5) / 8 * sc.LAKE_DISTANCE_M)) for k in range(8)]
+STYLE_BASE = np.array([c for c, _, _ in sc.LINE_STYLES.values()], np.float32)
+STYLE_WIDTH = np.array([w for _, w, _ in sc.LINE_STYLES.values()])
+STYLE_DIST = np.array([d for _, _, d in sc.LINE_STYLES.values()], np.float32)
 
 
 class View:
@@ -157,7 +162,9 @@ class View:
         lo_y, hi_y = np.minimum.reduceat(scr[:, 1], first), np.maximum.reduceat(scr[:, 1], first)
         on = (zmax > NEAR) & (hi_x >= 0) & (lo_x <= self.w) & (hi_y >= 0) & (lo_y <= self.h)
         simple = on & (zmin >= NEAR) & (lo_x > -self.w) & (hi_x < 2 * self.w) & (lo_y > -self.h) & (hi_y < 2 * self.h)
-        steps = np.minimum((dists[lakes] / sc.LAKE_DISTANCE_M * len(LAKE_COLORS)).astype(int), len(LAKE_COLORS) - 1)
+        horiz = dists[lakes]
+        slant = np.hypot(horiz, self.cam_height)
+        colors = feature_colors(np.array(sc.LAKE_COLOR, np.float32), slant, horiz, sc.LAKE_DISTANCE_M)
         draw = pygame.draw.polygon
         for k in np.nonzero(on)[0]:
             a, b = bounds[k], bounds[k + 1]
@@ -169,7 +176,7 @@ class View:
                     continue
                 pts = _clip_rect(self.to_screen(poly), -2, -2, self.w + 2, self.h + 2)
             if len(pts) >= 3:
-                draw(self.surface, LAKE_COLORS[steps[k]], pts.tolist())
+                draw(self.surface, colors[k], pts.tolist())
 
     def draw_lines(self, lines):
         chunks = lines.chunks_in(sc.Scenery.cells_ahead(self.pos[0], self.pos[2], self.heading, MAX_LINE_M))
@@ -197,10 +204,11 @@ class View:
         symin = np.minimum.reduceat(scr[:, 1], first)
         symax = np.maximum.reduceat(scr[:, 1], first)
         max_dist = STYLE_DIST[style]
-        dist = np.maximum(zmin, 0)  # forward distance of the chunk's near end -- what the haze steps on
+        # Line-of-sight distance to each chunk's nearest point, and the horizontal part of it.
+        slant = np.sqrt(np.minimum.reduceat((cam * cam).sum(axis=1), first))
+        horiz = np.sqrt(np.maximum(slant * slant - self.cam_height ** 2, 0))
         on = ((zmax > NEAR) & (sxmax >= 0) & (sxmin <= self.w) & (symax >= 0) & (symin <= self.h)
-              & (dist < max_dist))
-        steps = np.minimum((dist / max_dist * 4).astype(int), 3)
+              & (horiz < max_dist))
         draw_lines, draw_line = pygame.draw.lines, pygame.draw.line
         surf = self.surface
         visible = np.nonzero(on)[0]
@@ -208,10 +216,11 @@ class View:
         # Plain lists for the per-chunk loop: indexing numpy one scalar at a
         # time costs more than the drawing on the Pi.
         widths = STYLE_WIDTH.tolist()
-        for k, a, b, st, step, near_ok in zip(visible.tolist(), bounds[visible].tolist(),
-                                              bounds[visible + 1].tolist(), style[visible].tolist(),
-                                              steps[visible].tolist(), (zmin[visible] >= NEAR).tolist()):
-            c = STYLE_COLORS[st][step]
+        colors = feature_colors(STYLE_BASE[style[visible]], slant[visible], horiz[visible], max_dist[visible])
+        for k, a, b, st, c, near_ok in zip(visible.tolist(), bounds[visible].tolist(),
+                                           bounds[visible + 1].tolist(), style[visible].tolist(),
+                                           colors, (zmin[visible] >= NEAR).tolist()):
+            c = tuple(c)
             width = widths[st]
             if near_ok:
                 draw_lines(surf, c, False, scr[a:b].tolist(), width)
