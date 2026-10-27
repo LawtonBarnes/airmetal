@@ -15,6 +15,7 @@ import argparse
 import math
 import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -50,12 +51,14 @@ import output  # noqa: E402
 import panel as panelmod  # noqa: E402
 import render3d  # noqa: E402
 import scenery  # noqa: E402
+import screens  # noqa: E402
 from geo import M_PER_NM  # noqa: E402
 
 # Standby, and the scenery check against the drone photos: 400 ft over the
 # Metal Shop, panning slowly from White Rock Lake toward downtown.
 STANDBY_CAM = {"alt_m": 122.0, "pitch": -6.0, "heading0": 252.0, "pan_deg": 25.0, "pan_sec": 60.0}
 HANDOFF_SEC = 6.0
+EXIT_GOTO_HOME = 42  # see STRINGS/SCRUTE: Home hands off to the app menu
 
 
 class App:
@@ -68,6 +71,17 @@ class App:
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, self._on_signal)
         self.out = output.open_output(ARGS.window)
+        # Splash first, so it's up while the scenery loads.
+        splash = screens.build_splash(config.SPLASH_PATH, config.VERSION)
+        self.out.write(splash.subsurface((0, 0, config.FRAME_W, config.VIEW_H)),
+                       splash.subsurface((0, config.VIEW_H, config.FRAME_W, config.VIEW_H)))
+        splash_until = time.time() + screens.SPLASH_SECONDS
+        self.screens = screens.Screens(config.LOGO_PATH)
+        self.about = None  # the ABOUT windshield, built once per BACK press
+        self.power_dialog = None  # selected index into screens.POWER_OPTIONS while it's up
+        self.power_action = None  # "shutdown" or "restart", run after the display is released
+        self.exit_code = 0
+        self.fps = 0.0
         self.world = scenery.Scenery(config.DATA_DIR, self.s["lat"], self.s["lon"])
         self.view = render3d.View(config.VIEW_LOW_W, config.VIEW_LOW_H, self.s["fov_deg"])
         self.view_big = pygame.Surface((config.FRAME_W, config.VIEW_H))
@@ -84,9 +98,72 @@ class App:
         self.f_card_big = pygame.font.Font(config.FONT_PATH, 30)
         self.f_card = pygame.font.Font(config.FONT_PATH, 20)
         self.last_report_wall = time.time()
+        while time.time() < splash_until and not self.quit_requested:
+            self.out.actions()  # keys during the splash are dropped, not queued
+            time.sleep(0.05)
 
     def _on_signal(self, signum, frame):
         self.quit_requested = True
+
+    # -- remote ----------------------------------------------------------------
+
+    def handle(self, action):
+        """One remote action. Returns False to quit. The fleet key map: Home
+        back to SCRUTE, Q/Esc/Menu quit, BACK toggles ABOUT, Power opens the
+        shutdown dialog; Left/Right pick the previous/next aircraft."""
+        if self.power_dialog is not None:
+            return self._handle_power_dialog(action)
+        if action == "home":
+            self.exit_code = EXIT_GOTO_HOME
+            return False
+        if action == "quit":
+            return False
+        if action == "back":
+            self.about = None if self.about is not None else self.screens.build_about(
+                f"AIR METAL {config.VERSION}", self.about_rows())
+        elif action == "power":
+            self.power_dialog = 0
+        elif self.about is not None:
+            pass  # only the keys above act while ABOUT is up
+        elif action in ("left", "right"):
+            self.pick(self.feed.clock(), +1 if action == "right" else -1)
+        return True
+
+    def _handle_power_dialog(self, action):
+        n = len(screens.POWER_OPTIONS)
+        if action in ("left", "up"):
+            self.power_dialog = (self.power_dialog - 1) % n
+        elif action in ("right", "down"):
+            self.power_dialog = (self.power_dialog + 1) % n
+        elif action == "enter":
+            choice = screens.POWER_OPTIONS[self.power_dialog]
+            if choice != "NO":
+                self.power_action = "shutdown" if choice == "YES" else "restart"
+                return False
+            self.power_dialog = None
+        elif action in ("quit", "back", "power"):
+            self.power_dialog = None
+        return True
+
+    def about_rows(self):
+        if ARGS.replay:
+            feed = ("FEED", "REPLAY")
+        else:
+            host = self.s["feed_url"].split("//", 1)[-1].split("/", 1)[0]
+            feed = ("FEED", f"READSB {host}")
+        status = "NO DATA" if getattr(self.feed, "error", None) else "ONLINE"
+        track = self.traffic.tracks.get(self.riding) if self.riding else None
+        riding = (track.info.callsign or track.info.hex.upper()) if track else "STANDBY"
+        return [
+            feed,
+            ("STATUS", status),
+            ("TRACKING", f"{len(self.traffic.tracks)} AIRCRAFT"),
+            ("RIDING", riding),
+            ("HOME", self.s["location_name"].upper()),
+            ("DELAY", f"{self.s['delay_sec']:g} SEC"),
+            ("FOV", f"{self.s['fov_deg']:g} DEG"),
+            ("FRAME RATE", f"{self.fps:.1f} FPS" if self.fps else "--"),
+        ]
 
     # -- choosing an aircraft ----------------------------------------------
 
@@ -162,30 +239,49 @@ class App:
         next_snap, snap_n = time.time() + 3, 0
         if ARGS.snap:
             os.makedirs(ARGS.snap, exist_ok=True)
-        while not self.quit_requested and self.out.handle_input(self):
+        fps_n, fps_t0 = 0, time.time()
+        running = True
+        while running and not self.quit_requested:
+            for action in self.out.actions():
+                if not self.handle(action):
+                    running = False
+                    break
+            if not running:
+                break
             now_wall = time.time()
             dt, prev = now_wall - prev, now_wall
             t0 = time.perf_counter()
+            # Traffic, the director and the camera keep going under ABOUT,
+            # so it comes back to the same ride; only the 3D render stops.
             track = self.update(dt)
             c = self.cam
-            self.view.set_camera(c.x, c.y, c.z, c.heading, c.pitch, c.bank)
-            self.view.render(self.world)
-            pygame.transform.scale(self.view.surface, (config.FRAME_W, config.VIEW_H), self.view_big)
-            if track is not None and time.time() < self.handoff_until:
-                self.draw_card(self.view_big, track)
-            elif track is None:
-                self.draw_standby(self.view_big)
+            if self.about is not None:
+                top = self.about.copy() if self.power_dialog is not None else self.about
+            else:
+                self.view.set_camera(c.x, c.y, c.z, c.heading, c.pitch, c.bank)
+                self.view.render(self.world)
+                pygame.transform.scale(self.view.surface, (config.FRAME_W, config.VIEW_H), self.view_big)
+                if track is not None and time.time() < self.handoff_until:
+                    self.draw_card(self.view_big, track)
+                elif track is None:
+                    self.draw_standby(self.view_big)
+                top = self.view_big
+            if self.power_dialog is not None:
+                self.screens.draw_power_dialog(top, self.power_dialog)
             t1 = time.perf_counter()
             dist_nm = math.hypot(c.x, c.z) / M_PER_NM
             ok = time.time() - self.last_report_wall < 30 and not getattr(self.feed, "error", None)
             panel_surf = self.panel.draw(c, track.info if track else None, dist_nm, ok)
             t2 = time.perf_counter()
-            self.out.write(self.view_big, panel_surf)
+            self.out.write(top, panel_surf)
             t3 = time.perf_counter()
             stats["view"] += t1 - t0
             stats["panel"] += t2 - t1
             stats["out"] += t3 - t2
             stats["n"] += 1
+            fps_n += 1
+            if now_wall - fps_t0 >= 5:
+                self.fps, fps_n, fps_t0 = fps_n / (now_wall - fps_t0), 0, now_wall
             if ARGS.stats and now_wall - last_print > 10:
                 n = stats["n"]
                 print(f"{n / (now_wall - last_print):4.1f} fps  view {1000 * stats['view'] / n:5.1f}ms  "
@@ -194,7 +290,7 @@ class App:
                 stats, last_print = {"view": 0.0, "panel": 0.0, "out": 0.0, "n": 0}, now_wall
             if ARGS.snap and now_wall >= next_snap:
                 frame = pygame.Surface((config.FRAME_W, config.FRAME_H))
-                frame.blit(self.view_big, (0, 0))
+                frame.blit(top, (0, 0))
                 frame.blit(panel_surf, (0, config.VIEW_H))
                 pygame.image.save(frame, os.path.join(ARGS.snap, f"frame_{snap_n:03d}.png"))
                 snap_n += 1
@@ -203,7 +299,12 @@ class App:
                 break
             clock.tick(config.TARGET_FPS)
         self.out.close()
-        return self.out.exit_code
+        pygame.quit()
+        if self.power_action == "shutdown":
+            subprocess.run(["sudo", "shutdown", "-h", "now"])
+        elif self.power_action == "restart":
+            subprocess.run(["sudo", "shutdown", "-r", "now"])
+        return self.exit_code
 
 
 def main():

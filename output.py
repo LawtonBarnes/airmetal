@@ -2,6 +2,9 @@
 development, or the Pi's /dev/fb0 plus the remote (evdev), the way every
 METAL SHOP app runs on the fleet.
 
+Both turn raw keys into the same small set of actions (see ACTIONS), so
+main.py decides what a key means once, for both.
+
 The framebuffer path writes the two halves separately -- the windshield
 (top 1024x384) and the panel (bottom 1024x384) -- each converted to RGB565
 by an SDL blit into a 16-bit surface (~4ms for a whole XGA frame on a Pi 3B,
@@ -19,7 +22,11 @@ import config
 
 KDSETMODE, KD_TEXT, KD_GRAPHICS = 0x4B3A, 0x00, 0x01
 FBIO_WAITFORVSYNC = 0x40044620
-EXIT_GOTO_HOME = 42  # see STRINGS/SCRUTE: Home hands off to the app menu
+MOUSE_MOVE_THRESHOLD = 12  # cumulative REL_X/REL_Y units before it counts as one direction press
+
+# home: quit to SCRUTE's app menu. quit: plain quit. back: ABOUT.
+# power: the shutdown dialog. enter/left/right/up/down: the D-pad.
+ACTIONS = ("home", "quit", "back", "power", "enter", "left", "right", "up", "down")
 
 
 def open_output(window):
@@ -27,24 +34,29 @@ def open_output(window):
 
 
 class WindowOutput:
-    exit_code = 0
+    """PC stand-ins for the remote: H = Home, Backspace = BACK, P = Power."""
+
+    KEYS = {
+        pygame.K_h: "home",
+        pygame.K_ESCAPE: "quit", pygame.K_q: "quit",
+        pygame.K_BACKSPACE: "back",
+        pygame.K_p: "power",
+        pygame.K_RETURN: "enter", pygame.K_KP_ENTER: "enter",
+        pygame.K_LEFT: "left", pygame.K_RIGHT: "right", pygame.K_UP: "up", pygame.K_DOWN: "down",
+    }
 
     def __init__(self):
         pygame.display.set_caption("AIR METAL")
         self.screen = pygame.display.set_mode((config.FRAME_W, config.FRAME_H))
 
-    def handle_input(self, app):
+    def actions(self):
+        out = []
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
-                return False
-            if ev.type == pygame.KEYDOWN:
-                if ev.key in (pygame.K_ESCAPE, pygame.K_q):
-                    return False
-                if ev.key == pygame.K_RIGHT:
-                    app.pick(app.feed.clock(), +1)
-                elif ev.key == pygame.K_LEFT:
-                    app.pick(app.feed.clock(), -1)
-        return True
+                out.append("quit")
+            elif ev.type == pygame.KEYDOWN and ev.key in self.KEYS:
+                out.append(self.KEYS[ev.key])
+        return out
 
     def write(self, top, bottom):
         self.screen.blit(top, (0, 0))
@@ -60,8 +72,18 @@ class FramebufferOutput:
         global fcntl
         import fcntl  # noqa: F401 -- Linux only, like evdev
         import evdev
-        from evdev import ecodes
-        self.ecodes = ecodes
+        from evdev import ecodes as e
+        self.ecodes = e
+        # Same key map as the rest of the fleet.
+        self.keys = {
+            e.KEY_HOMEPAGE: "home", e.KEY_HOME: "home",
+            e.KEY_Q: "quit", e.KEY_ESC: "quit", e.KEY_COMPOSE: "quit",
+            e.KEY_BACK: "back",
+            e.KEY_POWER: "power",
+            e.KEY_ENTER: "enter", e.KEY_KPENTER: "enter", e.BTN_LEFT: "enter", e.BTN_MOUSE: "enter",
+            e.KEY_LEFT: "left", e.KEY_RIGHT: "right", e.KEY_UP: "up", e.KEY_DOWN: "down",
+        }
+        self._rel_accum = {e.REL_X: 0, e.REL_Y: 0}
         sys_dir = Path("/sys/class/graphics") / Path(dev).name
         self.width, self.height = (int(x) for x in (sys_dir / "virtual_size").read_text().split(","))
         bpp = int((sys_dir / "bits_per_pixel").read_text())
@@ -74,7 +96,6 @@ class FramebufferOutput:
                             mmap.PROT_WRITE | mmap.PROT_READ)
         self.half = pygame.Surface((config.FRAME_W, config.VIEW_H), 0, 16)
         self.vsync = True
-        self.exit_code = 0
         # Console into graphics mode so the text console can't draw over us.
         self.tty_fd = None
         try:
@@ -86,33 +107,35 @@ class FramebufferOutput:
         self.devices = []
         for path in evdev.list_devices():
             d = evdev.InputDevice(path)
-            if d.capabilities().get(ecodes.EV_KEY):
+            if d.capabilities().get(e.EV_KEY):
                 try:
                     d.grab()
                 except OSError:
                     pass
                 self.devices.append(d)
 
-    def handle_input(self, app):
+    def actions(self):
         e = self.ecodes
+        out = []
         for d in self.devices:
             try:
                 events = list(d.read())
             except (BlockingIOError, OSError):
                 continue
             for ev in events:
-                if ev.type != e.EV_KEY or ev.value != 1:
-                    continue
-                if ev.code in (e.KEY_HOMEPAGE, e.KEY_HOME):
-                    self.exit_code = EXIT_GOTO_HOME
-                    return False
-                if ev.code in (e.KEY_Q, e.KEY_ESC, e.KEY_COMPOSE):
-                    return False
-                if ev.code == e.KEY_RIGHT:
-                    app.pick(app.feed.clock(), +1)
-                elif ev.code == e.KEY_LEFT:
-                    app.pick(app.feed.clock(), -1)
-        return True
+                if ev.type == e.EV_KEY and ev.value == 1 and ev.code in self.keys:
+                    out.append(self.keys[ev.code])
+                elif ev.type == e.EV_REL and ev.code in self._rel_accum:
+                    # Air-mouse movement -> discrete D-pad presses, as in loudness.py.
+                    self._rel_accum[ev.code] += ev.value
+                    accum = self._rel_accum[ev.code]
+                    if abs(accum) >= MOUSE_MOVE_THRESHOLD:
+                        self._rel_accum[ev.code] = 0
+                        if ev.code == e.REL_X:
+                            out.append("right" if accum > 0 else "left")
+                        else:
+                            out.append("down" if accum > 0 else "up")
+        return out
 
     def _write_rows(self, surf, y0):
         self.half.blit(surf, (0, 0))

@@ -12,6 +12,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings.ini")
 FONT_PATH = os.path.join(BASE_DIR, "VCR_OSD_MONO_1.001.ttf")
 DATA_DIR = os.path.join(BASE_DIR, "data")
+SPLASH_PATH = os.path.join(BASE_DIR, "splash.png")  # optional -- see screens.build_splash
+LOGO_PATH = os.path.join(BASE_DIR, "metalshop-logo.png")  # ABOUT screen
 
 # The wall: one XGA frame, split 2x2 by the OREI into 512x384 quadrants.
 FRAME_W, FRAME_H = 1024, 768
