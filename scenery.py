@@ -52,6 +52,13 @@ SUN_DIR = (-0.42, -0.91)  # from the south-southwest
 WALL_SHADE = (0.58, 1.0)  # brightness facing away from the sun .. facing it
 BUILDING_DISTANCE_M = 45000
 
+# Aerial-photo ground near the shop (data/aerial_*, tools/build_aerial.py):
+# this many meters per pixel over +-AERIAL_HALF_M; the land cover takes
+# over beyond it, blended across AERIAL_BLEND_M at the edge.
+AERIAL_M_PER_PX = 8.0
+AERIAL_HALF_M = 16000.0
+AERIAL_BLEND_M = 2000.0
+
 LAND_M_PER_PX = 32.0
 LAND_CLASSES = {
     "water": WATER_COLOR,
@@ -219,11 +226,30 @@ class Scenery:
             self.land_m_per_px = float(lc["m_per_px"])
             self.land_half_m = float(lc["half_m"])
             self.attribution += "; " + str(lc["attribution"])
+        # Aerial photo near the shop (tools/build_aerial.py). Only its
+        # geometry here: the renderer keeps a packed, mipmapped copy cached
+        # (see render3d.View._init_aerial) and calls aerial_pixels() only to
+        # (re)build that.
+        self.aerial_path = None
+        path = self._find(data_dir, lat, lon, "aerial", required=False)
+        if path and self.land is not None:
+            meta = np.load(path)
+            self.aerial_path = path
+            self.aerial_m_per_px = float(meta["m_per_px"])
+            self.aerial_half_m = float(meta["half_m"])
+            self.attribution += "; " + str(meta["attribution"])
         self.buildings = None
         path = self._find(data_dir, lat, lon, "buildings", required=False)
         if path:
             self.buildings = Buildings(np.load(path))
             self.attribution += "; " + self.buildings.attribution
+
+    def aerial_pixels(self):
+        """-> (N, N, 3) rgb, (N, N) night light; row 0 = south edge, col 0 = west."""
+        import pygame  # here, not at the top: the build tools import scenery without a display
+        img = pygame.image.load(self.aerial_path[:-len(".npz")] + ".jpg")
+        rgb = pygame.surfarray.array3d(img).transpose(1, 0, 2)[::-1]
+        return rgb, np.load(self.aerial_path)["emit"]
 
     @staticmethod
     def _find(data_dir, lat, lon, kind="scenery", required=True):

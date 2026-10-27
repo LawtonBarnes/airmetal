@@ -3,3 +3,5 @@ settings.ini
 recordings/
 tools/nlcd_cache/
 tools/osm_cache/
+tools/naip_cache/
+data/cache/

@@ -30,6 +30,7 @@ Coordinates: x east, y up, z north (meters); heading clockwise from north,
 pitch nose-up positive, bank right-wing-down positive.
 """
 import math
+import os
 
 import numpy as np
 import pygame
@@ -55,6 +56,7 @@ MIN_LAKE_PX = 2.0  # lakes narrower than this on screen are skipped
 LAND_HAZE_STEPS = 16
 LAND_SKY_STEPS = 256 - len(sc.LAND_CLASSES) * LAND_HAZE_STEPS
 LAND_MIP_LEVELS = 4  # 32, 64, 128, 256 m
+AERIAL_MIP_LEVELS = 6  # 8 .. 256 m
 TREE_TILE = 256  # per-texel tree randoms repeat every this many texels (8 km)
 BAYER4 = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]], np.float32) / 16 - 0.5
 
@@ -97,11 +99,15 @@ def _vivid(c, s):
     return np.clip(luma + (c - luma) * s, 0, 255)
 
 
+SATURATION = 1.0  # set_saturation's; the aerial photo gets it when a View packs it
+
+
 def set_saturation(s, world=None):
     """Scales the saturation of every scene color -- sky, haze, land cover,
     water, lines, trees and (given the Scenery) buildings -- from the
     drone-matched originals. Call once, before building a View."""
-    global SKY_BANDS
+    global SKY_BANDS, SATURATION
+    SATURATION = s
     if s == 1.0:
         return
     SKY_BANDS = [(e, tuple(_vivid(c, s))) for e, c in SKY_BANDS]
@@ -173,6 +179,7 @@ class View:
         self.star_bright = (130 + 125 * rng.random(STAR_COUNT) ** 2) * np.clip(z / math.sin(math.radians(20)), 0.25, 1)
         self.ground_color = GROUND_NEAR  # what features fade into
         self.tree_chance = None  # per land class, or None: no trees
+        self.aerial = None  # aerial-photo mips (see _init_aerial), or None
         if self.land is not None:
             # The land cover's average color, by area.
             counts = np.bincount(self.land.land.ravel(), minlength=len(sc.LAND_CLASSES))
@@ -185,6 +192,7 @@ class View:
             self._init_land(ground_scale)
             if self.ground_smooth:
                 self._init_smooth(ground_scale)
+                self._init_aerial(land)
             return
         self._flat_palette()
         self.sky_scale = (SKY_STEPS - 1) / math.sin(math.radians(SKY_TOP_DEG))
@@ -268,6 +276,55 @@ class View:
             src = mip[:2 * m, :2 * m].astype(np.uint16)
             mip = ((src[0::2, 0::2] + src[1::2, 0::2] + src[0::2, 1::2] + src[1::2, 1::2]) >> 2).astype(np.uint8)
             self.land_mips.append((mip.reshape(-1, 4), m))
+
+    def _init_aerial(self, world):
+        """The aerial photo near the shop, packed like the land mips: level 0
+        (n*n, 4) uint8 rgb + night light, then box-averaged levels. Decoding
+        and averaging a 16-megapixel photo takes the Pi most of a minute, so
+        the levels are cached next to the data (data/cache/, rebuilt when
+        the photo or the saturation setting changes) and memory-mapped: near-instant, and only the
+        parts actually seen get read in."""
+        self.aerial = None
+        path = getattr(world, "aerial_path", None)
+        if path is None:
+            return
+        st = os.stat(path[:-len(".npz")] + ".jpg")
+        cache = os.path.join(os.path.dirname(path), "cache")
+        stem = os.path.join(cache, f"{os.path.basename(path)[:-4]}_{st.st_size}_{int(st.st_mtime)}_s{SATURATION:g}")
+        names = [f"{stem}_mip{lv}.npy" for lv in range(AERIAL_MIP_LEVELS)]
+        if not all(os.path.exists(p) for p in names):
+            rgb, emit = world.aerial_pixels()
+            n = rgb.shape[0]
+            mip = np.empty((n, n, 4), np.uint8)
+            for r in range(0, n, 250):  # saturation baked in, in strips (float copies of it all won't fit)
+                mip[r:r + 250, :, :3] = _vivid(rgb[r:r + 250], SATURATION) if SATURATION != 1.0 else rgb[r:r + 250]
+            mip[..., 3] = emit
+            del rgb, emit
+            try:
+                os.makedirs(cache, exist_ok=True)
+                for old in os.listdir(cache):  # earlier builds of this photo
+                    if old.startswith(os.path.basename(path)[:-4] + "_"):
+                        os.remove(os.path.join(cache, old))
+                for lv, name in enumerate(names):
+                    if lv:
+                        m = mip.shape[0] // 2
+                        src = mip[:2 * m, :2 * m].astype(np.uint16)
+                        mip = ((src[0::2, 0::2] + src[1::2, 0::2] + src[0::2, 1::2] + src[1::2, 1::2])
+                               >> 2).astype(np.uint8)
+                        del src
+                    np.save(name + ".tmp.npy", mip)
+                    os.replace(name + ".tmp.npy", name)
+            except OSError as exc:
+                print(f"aerial cache not written ({exc}); ground falls back to land cover", flush=True)
+                return
+            del mip
+        mips = []
+        for name in names:
+            lv = np.asarray(np.load(name, mmap_mode="r"))  # a plain view: memmap indexing has Python overhead
+            mips.append((lv.reshape(-1, 4), lv.shape[0]))
+        self.aerial = mips
+        self.aerial_inv_m = 1.0 / world.aerial_m_per_px
+        self.aerial_half_m = world.aerial_half_m
 
     # -- time of day ------------------------------------------------------
 
@@ -355,6 +412,34 @@ class View:
         mip, m = self.land_mips[level]
         return mip[row * m + col].astype(np.float32)
 
+    def _aerial_texels(self, level, row, col):
+        mip, m = self.aerial[level]
+        return mip[row * m + col].astype(np.float32)
+
+    @staticmethod
+    def _bilinear(texels, sizes, levels, gx, gz, spread):
+        """Bilinear, mipmapped samples (k, 4) at level-0 texel coords gx, gz,
+        `spread` level-0 texels per sample. texels(level, row, col) fetches."""
+        level = np.clip(np.log2(np.maximum(spread, 1.0)), 0, levels - 1).astype(np.int32)
+        col = np.empty((len(gx), 4), np.float32)
+        for lv in range(levels):
+            sel = np.nonzero(level == lv)[0]
+            if not len(sel):
+                continue
+            size = sizes[lv]
+            u = gx[sel] * (1.0 / 2 ** lv) - 0.5
+            v = gz[sel] * (1.0 / 2 ** lv) - 0.5
+            c0 = np.floor(u)
+            r0 = np.floor(v)
+            fu = (u - c0)[:, None]
+            fv = (v - r0)[:, None]
+            c0 = np.clip(c0.astype(np.int32), 0, size - 2)
+            r0 = np.clip(r0.astype(np.int32), 0, size - 2)
+            top = texels(lv, r0, c0) * (1 - fu) + texels(lv, r0, c0 + 1) * fu
+            bot = texels(lv, r0 + 1, c0) * (1 - fu) + texels(lv, r0 + 1, c0 + 1) * fu
+            col[sel] = top * (1 - fv) + bot * fv
+        return col
+
     def draw_smooth(self):
         rays = self.land_rays
         lh, lw = rays.shape[:2]
@@ -373,32 +458,39 @@ class View:
             w = world[g]
             down = -w[:, 1]
             t = self.cam_height / down
-            inv = self.land_inv_m
-            half = self.land.land_half_m
-            # Ground position in level-0 texel units.
-            gx = (self.pos[0] + w[:, 0] * t + half) * inv
-            gz = (self.pos[2] + w[:, 2] * t + half) * inv
-            # Texels per sample: grows with distance and as the ray grazes
-            # the ground (geometric mean of the along- and across-view stretch).
-            texels = t * self.land_pix_angle * inv / np.sqrt(down)
-            level = np.clip(np.log2(np.maximum(texels, 1.0)), 0, LAND_MIP_LEVELS - 1).astype(np.int32)
+            # Where each ray lands (m), and the ground meters one sample
+            # covers there: grows with distance and as the ray grazes the
+            # ground (geometric mean of the along- and across-view stretch).
+            wx = self.pos[0] + w[:, 0] * t
+            wz = self.pos[2] + w[:, 2] * t
+            spread_m = t * self.land_pix_angle / np.sqrt(down)
             col = np.empty((len(g), 4), np.float32)
-            for lv in range(LAND_MIP_LEVELS):
-                sel = np.nonzero(level == lv)[0]
-                if not len(sel):
-                    continue
-                size = self.land_n if lv == 0 else self.land_mips[lv][1]
-                u = gx[sel] * (1.0 / 2 ** lv) - 0.5
-                v = gz[sel] * (1.0 / 2 ** lv) - 0.5
-                c0 = np.floor(u)
-                r0 = np.floor(v)
-                fu = (u - c0)[:, None]
-                fv = (v - r0)[:, None]
-                c0 = np.clip(c0.astype(np.int32), 0, size - 2)
-                r0 = np.clip(r0.astype(np.int32), 0, size - 2)
-                top = self._land_texels(lv, r0, c0) * (1 - fu) + self._land_texels(lv, r0, c0 + 1) * fu
-                bot = self._land_texels(lv, r0 + 1, c0) * (1 - fu) + self._land_texels(lv, r0 + 1, c0 + 1) * fu
-                col[sel] = top * (1 - fv) + bot * fv
+            # Aerial photo inside its square, fading to the land cover over
+            # its last AERIAL_BLEND_M.
+            if self.aerial is not None:
+                ah = self.aerial_half_m
+                edge = ah - np.maximum(np.abs(wx), np.abs(wz))
+                photo = np.clip(edge / sc.AERIAL_BLEND_M, 0, 1)
+                in_a = np.nonzero(photo > 0)[0]
+                in_l = np.nonzero(photo < 1)[0]
+            else:
+                in_a, in_l = np.zeros(0, np.int64), np.arange(len(g))
+            if len(in_l):
+                inv, half = self.land_inv_m, self.land.land_half_m
+                sizes = [self.land_n] + [m for _, m in self.land_mips[1:]]
+                col[in_l] = self._bilinear(self._land_texels, sizes, LAND_MIP_LEVELS, (wx[in_l] + half) * inv,
+                                           (wz[in_l] + half) * inv, spread_m[in_l] * inv)
+            if len(in_a):
+                inv, half = self.aerial_inv_m, self.aerial_half_m
+                sizes = [m for _, m in self.aerial]
+                a = self._bilinear(self._aerial_texels, sizes, AERIAL_MIP_LEVELS, (wx[in_a] + half) * inv,
+                                   (wz[in_a] + half) * inv, spread_m[in_a] * inv)
+                k = photo[in_a][:, None]
+                band = np.nonzero(k[:, 0] < 1)[0]  # in the edge band: land was sampled too
+                if len(band):
+                    kb = k[band]
+                    a[band] = a[band] * kb + col[in_a[band]] * (1 - kb)
+                col[in_a] = a
             rgb = col[:, :3]
             if self.lighting.day < 1.0:
                 rgb = rgb * LIGHT + _glow(col[:, 3:]) * LIGHTS_ON

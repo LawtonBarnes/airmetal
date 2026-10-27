@@ -11,7 +11,10 @@ The wall is one 1024x768 frame from a Raspberry Pi 3B+, split into four
 - **Top two tubes: the windshield.** A flat-shaded, 1990-style 3D view from
   the cockpit of the aircraft being ridden: sky with haze, textured ground,
   OpenStreetMap roads, rail, rivers and lakes out to 60 NM, and the skyline
-  (every building 60 m and up, from OSM, Reunion Tower's ball included). The ground is
+  (every building 60 m and up, from OSM, Reunion Tower's ball included).
+  Within 16 km of the shop the ground is the real aerial photo (USDA NAIP,
+  8 m/px, color-matched to drone shots from the shop), blending into the
+  land cover beyond. The ground is
   real land cover (USGS NLCD 2021 -- tree-canopy neighborhoods, commercial
   roofs, forest, pasture, water), looked up per pixel where each view ray
   meets the ground, SNES "Mode 7" style, blended and mipmapped so it doesn't
@@ -96,6 +99,9 @@ Esc/Q = quit.
   classes, +-112 km) from NLCD via MRLC's map server (PC only).
 - `tools/build_buildings.py` -- builds `data/buildings_*.npz` (the
   skyline) from OpenStreetMap via Overpass (PC only).
+- `tools/build_aerial.py` -- builds `data/aerial_*.jpg/.npz` (the photo
+  ground and its night-light map) from NAIP via USGS (PC only). The Pi
+  caches the photo's mipmaps in `data/cache/` (gitignored) on first launch.
 - `tools/bench_mode7.py` -- the textured-ground cost spike.
 - `tools/director_trace.py` -- replays a recording through the director
   and lists every ride it would take.
