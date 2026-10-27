@@ -71,6 +71,28 @@ LAND_CLASSES = {
     "wetland": (66, 94, 66),
 }
 
+# Trees: low-altitude rides get pyramid trees on the wooded land classes,
+# one chance per land texel (a deterministic hash picks which, and where in
+# the texel), so they stay put frame to frame.
+TREE_CHANCE = {
+    "forest": 0.9, "evergreen": 0.9, "wetland": 0.5,
+    "developed_low": 0.45, "developed_open": 0.25, "developed_medium": 0.15,
+    "pasture": 0.04, "grass": 0.04,
+}
+TREE_COLOR = {"evergreen": (36, 74, 40)}  # anything else: TREE_COLOR_DEFAULT
+TREE_COLOR_DEFAULT = (60, 98, 44)
+TREE_HEIGHT_M = (11.0, 20.0)
+TREE_WIDTH = 0.75  # base width / height
+# Range grows with height (the nearest ground in view is farther away):
+# TREE_RANGE_PER_AGL x the camera's height, within these limits. Past
+# TREE_THIN x the range, trees thin out with distance squared, so they're
+# about as dense on screen far as near.
+TREE_RANGE_M = (1200.0, 2500.0)
+TREE_RANGE_PER_AGL = 8.0
+TREE_THIN = 0.35
+TREE_MAX_AGL_M = 500.0  # ~1,650 ft AGL, ~2,100 ft on the altimeter: higher, specks -- none drawn
+TREE_CAP = 400  # at most this many (each costs ~2 polygons); past it, thinned evenly
+
 
 class Lines:
     """Every line layer together, so a frame does one gather/project pass.

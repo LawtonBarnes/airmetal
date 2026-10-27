@@ -53,6 +53,7 @@ MIN_LAKE_PX = 2.0  # lakes narrower than this on screen are skipped
 LAND_HAZE_STEPS = 16
 LAND_SKY_STEPS = 256 - len(sc.LAND_CLASSES) * LAND_HAZE_STEPS
 LAND_MIP_LEVELS = 4  # 32, 64, 128, 256 m
+TREE_TILE = 256  # per-texel tree randoms repeat every this many texels (8 km)
 BAYER4 = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]], np.float32) / 16 - 0.5
 
 
@@ -95,7 +96,7 @@ def _sky_palette(steps):
 
 
 class View:
-    def __init__(self, width, height, fov_deg, land=None, ground_scale=2, ground_filter="smooth"):
+    def __init__(self, width, height, fov_deg, land=None, ground_scale=2, ground_filter="smooth", trees=True):
         """`land`: a Scenery with a land-cover raster, for the textured ground
         (None, or a Scenery without one: flat ground)."""
         self.w, self.h = width, height
@@ -107,10 +108,16 @@ class View:
         self.land = land if land is not None and land.land is not None else None
         self.ground_smooth = ground_filter == "smooth"
         self.ground_color = GROUND_NEAR  # what features fade into
+        self.tree_chance = None  # per land class, or None: no trees
         if self.land is not None:
             # The land cover's average color, by area.
             counts = np.bincount(self.land.land.ravel(), minlength=len(sc.LAND_CLASSES))
             self.ground_color = (counts[:, None] * np.array(list(sc.LAND_CLASSES.values()), np.float32)).sum(0) / counts.sum()
+            if trees:
+                self.tree_chance = np.array([sc.TREE_CHANCE.get(c, 0.0) for c in sc.LAND_CLASSES], np.float32)
+                self.tree_rand = np.random.default_rng(1).random((5, TREE_TILE, TREE_TILE), np.float32)
+                self.tree_color = np.array([sc.TREE_COLOR.get(c, sc.TREE_COLOR_DEFAULT) for c in sc.LAND_CLASSES],
+                                           np.float32)
             self._init_land(ground_scale)
             if self.ground_smooth:
                 self._init_smooth(ground_scale)
@@ -529,11 +536,106 @@ class View:
             drawn += 1
         return drawn
 
+    def draw_trees(self):
+        """Pyramid trees near the camera, on low rides. Positions come from
+        the land-cover raster around the camera, hashed per texel; trees
+        shrink to nothing toward TREE_RANGE_M so they grow in, not pop in."""
+        if self.tree_chance is None or self.cam_height > sc.TREE_MAX_AGL_M:
+            return 0
+        cx, cz = float(self.pos[0]), float(self.pos[2])
+        half, inv, n = self.land.land_half_m, self.land_inv_m, self.land_n
+        rng = min(max(self.cam_height * sc.TREE_RANGE_PER_AGL, sc.TREE_RANGE_M[0]), sc.TREE_RANGE_M[1])
+        # The texels under the view's wedge: the box around the camera and
+        # the far arc, a little wider than the field of view.
+        hd = math.radians(self.heading)
+        spread = math.atan(self.w / 2 / self.focal) + math.radians(10)
+        xs = [cx] + [cx + rng * math.sin(hd + a) for a in (-spread, 0.0, spread)]
+        zs = [cz] + [cz + rng * math.cos(hd + a) for a in (-spread, 0.0, spread)]
+        c0, c1 = (max(int((min(xs) + half) * inv), 0), min(int((max(xs) + half) * inv) + 1, n))
+        r0, r1 = (max(int((min(zs) + half) * inv), 0), min(int((max(zs) + half) * inv) + 1, n))
+        if r1 <= r0 or c1 <= c0:
+            return 0
+        # Per-texel randoms from a tiled table (repeats every TREE_TILE texels).
+        # The pick channel for the whole window; the rest only where it hits.
+        tr = np.arange(r0, r1) % TREE_TILE
+        tc = np.arange(c0, c1) % TREE_TILE
+        cls = self.land.land[r0:r1, c0:c1]
+        # Distance thinning on the texel grid (texel centers), before any
+        # per-tree work: most of the window is far, and mostly thinned away.
+        dz2 = ((np.arange(r0, r1, dtype=np.float32) + 0.5) / inv - half - cz) ** 2
+        dx2 = ((np.arange(c0, c1, dtype=np.float32) + 0.5) / inv - half - cx) ** 2
+        d2 = np.maximum(dz2[:, None] + dx2[None, :], 1.0)
+        odds = self.tree_chance[cls] * np.minimum(1.0, (sc.TREE_THIN * rng) ** 2 / d2)
+        odds[d2 > rng * rng] = 0.0
+        hit = np.nonzero((self.tree_rand[0][tr[:, None], tc[None, :]] < odds).ravel())[0]
+        if not len(hit):
+            return 0
+        ncol = c1 - c0
+        hr, hc = hit // ncol, hit % ncol
+        rr, cc = hr + r0, hc + c0
+        cls, odds = cls.ravel()[hit], odds.ravel()[hit]
+        rnd = self.tree_rand[:, tr[hr], tc[hc]]  # (5, hits): pick, x, z, size, turn
+        x = (cc + 0.15 + 0.7 * rnd[1]) / inv - half
+        z = (rr + 0.15 + 0.7 * rnd[2]) / inv - half
+        dist = np.hypot(x - cx, z - cz)
+        keep = dist < rng
+        # In front of the camera and within the view's width (plus a margin).
+        base = self.ground_to_camera(np.stack([x, z], -1))
+        keep &= (base[:, 2] > 3 * NEAR) & (np.abs(base[:, 0]) < base[:, 2] * self.w / 2 / self.focal + 30)
+        idx = np.nonzero(keep)[0]
+        if len(idx) > sc.TREE_CAP:  # thin evenly: the ones that only just made it go first
+            idx = idx[np.argpartition(rnd[0, idx] / odds[idx], sc.TREE_CAP)[:sc.TREE_CAP]]
+        if not len(idx):
+            return 0
+        grow = np.clip((rng - dist[idx]) / (0.4 * rng), 0, 1)
+        lo, hi = sc.TREE_HEIGHT_M
+        height = (lo + (hi - lo) * rnd[3, idx]) * grow
+        tall_px = self.focal * height / np.maximum(base[idx, 2], 1.0)
+        sel = tall_px > 1.0
+        idx, height = idx[sel], height[sel]
+        if not len(idx):
+            return 0
+        order = np.argsort(-dist[idx])  # far to near
+        idx, height = idx[order], height[order]
+        k = len(idx)
+        # Four base corners, turned per tree, plus the apex: (k, 5) points.
+        ang = rnd[4, idx, None] * (math.pi / 2) + np.arange(4) * (math.pi / 2)  # (k, 4)
+        rad = (height * sc.TREE_WIDTH / 2)[:, None]
+        pts = np.empty((k, 5, 3), np.float32)
+        pts[:, :4, 0] = x[idx, None] + rad * np.cos(ang)
+        pts[:, :4, 1] = 0.0
+        pts[:, :4, 2] = z[idx, None] + rad * np.sin(ang)
+        pts[:, 4, 0], pts[:, 4, 1], pts[:, 4, 2] = x[idx], height, z[idx]
+        scr = self.to_screen(self.to_camera(pts))  # (k, 5, 2)
+        # Face j: corners j, j+1 and the apex. Its outward horizontal
+        # direction is halfway between the corners; normal ~ (height *
+        # outward, apothem up), apothem = rad / sqrt 2.
+        mid_ang = ang + math.pi / 4
+        nx, nz = np.cos(mid_ang), np.sin(mid_ang)
+        slope = rad * math.sqrt(0.5) / height[:, None]
+        to_x, to_z = self.pos[0] - pts[:, :4, 0], self.pos[2] - pts[:, :4, 2]
+        facing = nx * to_x + nz * to_z + slope * self.pos[1] > 0  # (k, 4); corners sit at y = 0
+        lit = np.clip(nx * sc.SUN_DIR[0] + nz * sc.SUN_DIR[1], 0, 1)
+        f = haze_amount(np.hypot(dist[idx], self.cam_height))[:, None, None]
+        colors = self.tree_color[cls[idx]][:, None, :] * (0.62 + 0.5 * lit)[..., None] * (1 - f) + HAZE * f
+        # Only the faces that show, already far to near (a tree's own
+        # visible faces never overlap, so their order doesn't matter).
+        tri = np.empty((k, 4, 3, 2), np.float32)
+        tri[:, :, 0] = scr[:, :4]
+        tri[:, :, 1] = np.roll(scr[:, :4], -1, axis=1)
+        tri[:, :, 2] = scr[:, 4, None]
+        draw = pygame.draw.polygon
+        surf = self.surface
+        for c, p in zip(np.minimum(colors[facing], 255).astype(int).tolist(), tri[facing].tolist()):
+            draw(surf, c, p)
+        return int(facing.sum())
+
     def render(self, world):
         self.draw_sky_and_ground()
         self.draw_lakes(world)
         n = self.draw_lines(world.lines)
         self.draw_buildings(world)
+        self.draw_trees()
         return n
 
 

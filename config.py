@@ -46,6 +46,10 @@ DEFAULTS = {
         # "smooth": blended texels + mipmaps, no shimmer in motion.
         # "nearest": chunky one-texel samples (cheaper, "digital camo").
         "ground_filter": "smooth",
+        # Pyramid trees on wooded land near the camera, below ~2,100 ft on the
+        # altimeter. Off: tried 2026-10-27, too pointy and sparse to read as
+        # trees, and denser costs too much on a Pi 3B+.
+        "trees": "off",
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
@@ -67,6 +71,7 @@ def load():
         "fov_deg": cp.getfloat("view", "fov_deg"),
         "ground_scale": cp.getint("view", "ground_scale"),
         "ground_filter": cp.get("view", "ground_filter"),
+        "trees": cp.getboolean("view", "trees"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),
     }
