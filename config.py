@@ -34,6 +34,10 @@ DEFAULTS = {
         "url": "http://192.168.68.70/tar1090/data/aircraft.json",
         "poll_sec": "1.0",
     },
+    "link": {
+        # GET /riding on this port tells JOAN JET which aircraft to circle.
+        "port": "8430",
+    },
     "view": {
         "fov_deg": "70",
         # How far behind live the camera flies, so it can interpolate
@@ -56,4 +60,5 @@ def load():
         "poll_sec": cp.getfloat("feed", "poll_sec"),
         "fov_deg": cp.getfloat("view", "fov_deg"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
+        "link_port": cp.getint("link", "port"),
     }

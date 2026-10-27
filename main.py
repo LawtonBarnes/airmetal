@@ -47,6 +47,7 @@ import pygame  # noqa: E402
 import director as directormod  # noqa: E402
 import feed as feedmod  # noqa: E402
 import flight  # noqa: E402
+import link  # noqa: E402
 import output  # noqa: E402
 import panel as panelmod  # noqa: E402
 import render3d  # noqa: E402
@@ -93,6 +94,7 @@ class App:
         self.traffic = flight.Traffic(self.s["lat"], self.s["lon"])
         self.cam = flight.Camera(self.s["ground_msl_m"])
         self.director = directormod.Director()
+        self.link = link.RideServer(self.s["link_port"])
         self.riding = None  # hex of the aircraft being ridden
         self.handoff_until = 0.0
         self.f_card_big = pygame.font.Font(config.FONT_PATH, 30)
@@ -192,8 +194,10 @@ class App:
         track = self.traffic.tracks.get(self.riding) if self.riding else None
         state = track.state_at(t_view) if track else None
         if state is not None:
+            self.link.riding = (track.info.hex, track.info.callsign)
             self.cam.follow(state, dt)
             return track
+        self.link.riding = None
         # Standby: hover over the Metal Shop, panning.
         c = self.cam
         c.reset()
@@ -298,6 +302,7 @@ class App:
             if t_end and now_wall > t_end:
                 break
             clock.tick(config.TARGET_FPS)
+        self.link.close()
         self.out.close()
         pygame.quit()
         if self.power_action == "shutdown":
