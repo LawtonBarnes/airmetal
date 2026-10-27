@@ -84,7 +84,8 @@ class App:
         self.exit_code = 0
         self.fps = 0.0
         self.world = scenery.Scenery(config.DATA_DIR, self.s["lat"], self.s["lon"])
-        self.view = render3d.View(config.VIEW_LOW_W, config.VIEW_LOW_H, self.s["fov_deg"])
+        self.view = render3d.View(config.VIEW_LOW_W, config.VIEW_LOW_H, self.s["fov_deg"],
+                                  self.world, self.s["ground_scale"], self.s["ground_filter"])
         self.view_big = pygame.Surface((config.FRAME_W, config.VIEW_H))
         self.panel = panelmod.Panel()
         if ARGS.replay:

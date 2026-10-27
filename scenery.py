@@ -7,6 +7,9 @@ to 60 NM -- in local meters, simplified for a 512x192 view).
     coarse grid, so a frame touches only the chunks near the camera and
     draws each with one pygame.draw.lines call;
   * lakes -> outline rings with bounding boxes.
+
+Plus, if data/landcover_<lat>_<lon>.npz exists (tools/build_landcover.py),
+the land-cover raster the textured ground is looked up in.
 """
 import glob
 import math
@@ -36,6 +39,27 @@ LINE_STYLES = {
 }
 LAKE_COLOR = WATER_COLOR
 LAKE_DISTANCE_M = 40000
+
+# Textured ground (data/landcover_*.npz, tools/build_landcover.py from NLCD):
+# land class -> base color, before haze. Order = the index stored in the raster.
+LAND_M_PER_PX = 32.0
+LAND_CLASSES = {
+    "water": WATER_COLOR,
+    # From the drone shots: neighborhoods read as tree canopy, commercial
+    # areas as pale roofs and parking.
+    # A shade darker than first tried, for separation from the sky.
+    "developed_open": (92, 122, 60),  # parks, golf courses, big lawns
+    "developed_low": (63, 87, 48),  # tree-shaded neighborhoods
+    "developed_medium": (88, 95, 75),  # canopy + roofs
+    "developed_high": (143, 139, 131),  # downtown, malls, the airports' aprons
+    "barren": (145, 133, 107),
+    "forest": (46, 77, 37),
+    "evergreen": (34, 66, 36),
+    "grass": (124, 126, 73),
+    "pasture": (104, 124, 61),
+    "crops": (126, 109, 70),
+    "wetland": (66, 94, 66),
+}
 
 
 class Lines:
@@ -94,15 +118,25 @@ class Scenery:
         rings = [lake_pts[lake_starts[i]:lake_starts[i + 1]] for i in range(len(lake_starts) - 1)]
         self.lake_bboxes = np.array([[*r.min(0), *r.max(0)] for r in rings], np.float32).reshape(-1, 4)
         self.attribution = str(data["attribution"])
+        self.land = None  # (N, N) uint8 LAND_CLASSES index; row 0 = south edge, col 0 = west
+        path = self._find(data_dir, lat, lon, "landcover", required=False)
+        if path:
+            lc = np.load(path)
+            self.land = lc["land"]
+            self.land_m_per_px = float(lc["m_per_px"])
+            self.land_half_m = float(lc["half_m"])
+            self.attribution += "; " + str(lc["attribution"])
 
     @staticmethod
-    def _find(data_dir, lat, lon):
-        for path in sorted(glob.glob(os.path.join(data_dir, "scenery_*.npz"))):
-            name = os.path.basename(path)[len("scenery_"):-len(".npz")]
+    def _find(data_dir, lat, lon, kind="scenery", required=True):
+        for path in sorted(glob.glob(os.path.join(data_dir, f"{kind}_*.npz"))):
+            name = os.path.basename(path)[len(kind) + 1:-len(".npz")]
             blat, blon = (float(v) for v in name.split("_"))
             if abs(blat - lat) < 0.0005 and abs(blon - lon) < 0.0005:
                 return path
-        raise FileNotFoundError(f"no scenery for {lat},{lon} in {data_dir} -- run tools/build_scenery.py")
+        if not required:
+            return None
+        raise FileNotFoundError(f"no {kind} for {lat},{lon} in {data_dir} -- run tools/build_{kind}.py")
 
     @staticmethod
     def cells_ahead(x, z, heading_deg, radius_m):

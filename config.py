@@ -40,6 +40,12 @@ DEFAULTS = {
     },
     "view": {
         "fov_deg": "70",
+        # Textured ground resolution: the land-cover pass runs at 1/this of
+        # the 512x192 view (2 = 256x96, free on a Pi 3B+; 1 = full, ~30ms more).
+        "ground_scale": "2",
+        # "smooth": blended texels + mipmaps, no shimmer in motion.
+        # "nearest": chunky one-texel samples (cheaper, "digital camo").
+        "ground_filter": "smooth",
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
@@ -59,6 +65,8 @@ def load():
         "feed_url": cp.get("feed", "url"),
         "poll_sec": cp.getfloat("feed", "poll_sec"),
         "fov_deg": cp.getfloat("view", "fov_deg"),
+        "ground_scale": cp.getint("view", "ground_scale"),
+        "ground_filter": cp.get("view", "ground_filter"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),
     }

@@ -9,8 +9,12 @@ The wall is one 1024x768 frame from a Raspberry Pi 3B+, split into four
 512x384 tubes by an OREI 2x2 video-wall controller:
 
 - **Top two tubes: the windshield.** A flat-shaded, 1990-style 3D view from
-  the cockpit of the aircraft being ridden: banded sky with haze, ground,
-  and OpenStreetMap roads, rail, rivers and lakes out to 60 NM.
+  the cockpit of the aircraft being ridden: sky with haze, textured ground,
+  and OpenStreetMap roads, rail, rivers and lakes out to 60 NM. The ground is
+  real land cover (USGS NLCD 2021 -- tree-canopy neighborhoods, commercial
+  roofs, forest, pasture, water), looked up per pixel where each view ray
+  meets the ground, SNES "Mode 7" style, blended and mipmapped so it doesn't
+  shimmer in motion.
 - **Bottom two: the instrument panel.** An analog six-pack (attitude,
   ground speed, turn coordinator, heading, altimeter, vertical speed),
   plus distance-from-the-shop and signal-strength gauges, and a data box
@@ -73,6 +77,9 @@ Esc/Q = quit.
 
 - `tools/build_scenery.py` -- builds `data/scenery_*.npz` from JOAN JET's
   basemap (PC only).
+- `tools/build_landcover.py` -- builds `data/landcover_*.npz` (32 m land
+  classes, +-112 km) from NLCD via MRLC's map server (PC only).
+- `tools/bench_mode7.py` -- the textured-ground cost spike.
 - `tools/director_trace.py` -- replays a recording through the director
   and lists every ride it would take.
 - `tools/screens_test.py` -- renders splash/ABOUT/dialog PNGs with the

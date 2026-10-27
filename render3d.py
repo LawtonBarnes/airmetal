@@ -10,6 +10,22 @@ mapped into a 256-color palette (96 haze steps of ground, 160 of sky:
 smooth on a CRT, and no more costly than a few hard bands). Ground features (lakes,
 roads) are then hazed by their own distance to match.
 
+With a land-cover raster (scenery.Scenery.land) the ground is textured, SNES
+"Mode 7" style: the same per-pixel ray also gives where on the ground it
+lands, and the color comes from that spot's land class -- palette = 12
+classes x 16 haze steps (even steps of haze_amount, so each is the same
+small change) + 64 of sky. That pass runs at 1/ground_scale
+resolution and is scaled up (at 2, 256x96: no slower than the flat ground on
+a Pi 3B+), so the ground reads as chunky texture while roads and lakes stay
+sharp on top. A 4x4 ordered dither hides the steps between haze levels.
+
+That "nearest" texture shimmers in motion -- each sample takes one texel,
+and jumps to the next as the camera moves. ground_filter = "smooth" (the
+default) instead blends the four nearest texels (bilinear), from a
+pre-averaged copy of the raster at 2x/4x/8x the texel size once texels get
+smaller than a sample (mipmaps, built at startup from the class colors), in
+full color with no palette, and scales the result up smoothly.
+
 Coordinates: x east, y up, z north (meters); heading clockwise from north,
 pitch nose-up positive, bank right-wing-down positive.
 """
@@ -34,6 +50,10 @@ GROUND_STEPS, SKY_STEPS = 96, 160  # palette entries; together, all 256
 SKY_TOP_DEG = 40.0  # the gradient's last color, and everything above it
 MAX_LINE_M = max(d for _, _, d in sc.LINE_STYLES.values())
 MIN_LAKE_PX = 2.0  # lakes narrower than this on screen are skipped
+LAND_HAZE_STEPS = 16
+LAND_SKY_STEPS = 256 - len(sc.LAND_CLASSES) * LAND_HAZE_STEPS
+LAND_MIP_LEVELS = 4  # 32, 64, 128, 256 m
+BAYER4 = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]], np.float32) / 16 - 0.5
 
 
 def haze_amount(d):
@@ -64,28 +84,96 @@ STYLE_WIDTH = np.array([w for _, w, _ in sc.LINE_STYLES.values()])
 STYLE_DIST = np.array([d for _, _, d in sc.LINE_STYLES.values()], np.float32)
 
 
+def _sky_palette(steps):
+    """`steps` sky colors, linear in sin(elevation) from the horizon to SKY_TOP_DEG."""
+    sin_top = math.sin(math.radians(SKY_TOP_DEG))
+    elev = np.degrees(np.arcsin(np.arange(steps) / (steps - 1) * sin_top))
+    anchors = np.array([e for e, _ in SKY_BANDS])
+    colors = np.array([c for _, c in SKY_BANDS], np.float32)
+    return [_rgb([np.interp(e, anchors, colors[:, k]) for k in range(3)]) for e in elev]
+
+
 class View:
-    def __init__(self, width, height, fov_deg):
+    def __init__(self, width, height, fov_deg, land=None, ground_scale=2, ground_filter="smooth"):
+        """`land`: a Scenery with a land-cover raster, for the textured ground
+        (None, or a Scenery without one: flat ground)."""
         self.w, self.h = width, height
         self.focal = width / 2 / math.tan(math.radians(fov_deg) / 2)
         self.surface = pygame.Surface((width, height))
         # Every pixel's unit view ray in camera space (x right, y up, z forward).
-        px, py = np.meshgrid(np.arange(width) + 0.5, np.arange(height) + 0.5)
-        rays = np.stack([(px - width / 2) / self.focal, (height / 2 - py) / self.focal, np.ones_like(px)], -1)
-        self.rays = (rays / np.linalg.norm(rays, axis=-1, keepdims=True)).astype(np.float32)
+        self.rays = self._rays(width, height, 1)
         self.backdrop = pygame.Surface((width, height), depth=8)
+        self.land = land if land is not None and land.land is not None else None
+        self.ground_smooth = ground_filter == "smooth"
+        if self.land is not None:
+            self._init_land(ground_scale)
+            if self.ground_smooth:
+                self._init_smooth(ground_scale)
+            return
         # Palette: 0..GROUND_STEPS-1 = ground, haze fraction 0 -> 1 (the index is
         # linear in distance / VISIBILITY_M, so each entry carries haze_amount's
         # curve); then the sky, linear in sin(elevation) from the horizon up.
         u = np.arange(GROUND_STEPS) / (GROUND_STEPS - 1)
         pal = [_rgb(hazed(GROUND_NEAR, k * VISIBILITY_M)) for k in u]
-        sin_top = math.sin(math.radians(SKY_TOP_DEG))
-        elev = np.degrees(np.arcsin(np.arange(SKY_STEPS) / (SKY_STEPS - 1) * sin_top))
-        anchors = np.array([e for e, _ in SKY_BANDS])
-        colors = np.array([c for _, c in SKY_BANDS], np.float32)
-        pal += [_rgb([np.interp(e, anchors, colors[:, k]) for k in range(3)]) for e in elev]
+        pal += _sky_palette(SKY_STEPS)
         self.backdrop.set_palette(pal)
-        self.sky_scale = (SKY_STEPS - 1) / sin_top
+        self.sky_scale = (SKY_STEPS - 1) / math.sin(math.radians(SKY_TOP_DEG))
+
+    def _rays(self, w, h, scale):
+        """Unit view rays (h, w, 3) through the centers of a w x h grid of
+        scale x scale pixel blocks."""
+        px, py = np.meshgrid((np.arange(w) + 0.5) * scale, (np.arange(h) + 0.5) * scale)
+        rays = np.stack([(px - self.w / 2) / self.focal, (self.h / 2 - py) / self.focal, np.ones_like(px)], -1)
+        return (rays / np.linalg.norm(rays, axis=-1, keepdims=True)).astype(np.float32)
+
+    def _init_land(self, scale):
+        lw, lh = self.w // scale, self.h // scale
+        self.land_rays = self._rays(lw, lh, scale)
+        self.land_surface = pygame.Surface((lw, lh), depth=8)
+        pal = []
+        for base in sc.LAND_CLASSES.values():
+            f = np.arange(LAND_HAZE_STEPS)[:, None] / (LAND_HAZE_STEPS - 1)
+            pal += [_rgb(c) for c in np.asarray(base, np.float32) * (1 - f) + HAZE * f]
+        pal += _sky_palette(LAND_SKY_STEPS)
+        self.land_surface.set_palette(pal)
+        self.backdrop.set_palette(pal)
+        self.sky_scale = (LAND_SKY_STEPS - 1) / math.sin(math.radians(SKY_TOP_DEG))
+        self.land_dither = np.tile(BAYER4, (lh // 4 + 1, lw // 4 + 1))[:lh, :lw]
+        self.land_sky0 = len(pal) - LAND_SKY_STEPS
+        self.land_inv_m = 1.0 / self.land.land_m_per_px
+        self.land_n = self.land.land.shape[0]
+
+    def _init_smooth(self, scale):
+        lw, lh = self.w // scale, self.h // scale
+        self.land_rgb_surface = pygame.Surface((lw, lh), depth=32)
+        self.land_lut = np.array(list(sc.LAND_CLASSES.values()), np.float32)
+        self.sky_lut = np.array(_sky_palette(256), np.float32)
+        self.sky_scale_rgb = 255 / math.sin(math.radians(SKY_TOP_DEG))
+        # Ground meters covered by one sample, per meter of ray length: the
+        # sample's angular size (scale pixels).
+        self.land_pix_angle = scale / self.focal
+        # Mip levels 1..: box-averaged class colors, (size*size, 3) uint8.
+        # Level 0 stays the class raster (colors looked up on the fly).
+        # Level 1 straight from the classes: each 2x2 block's four colors,
+        # looked up through a (class, class) -> summed-color table so it's two
+        # gathers, not four. Each later level averages the one before.
+        land = self.land.land
+        m = land.shape[0] // 2
+        lut16 = self.land_lut.astype(np.uint16)
+        k = len(lut16)
+        pair = (lut16[:, None, :] + lut16[None, :, :]).reshape(k * k, 3)
+        a = land[0:2 * m:2, 0:2 * m:2].astype(np.uint16) * k + land[0:2 * m:2, 1:2 * m:2]
+        b = land[1:2 * m:2, 0:2 * m:2].astype(np.uint16) * k + land[1:2 * m:2, 1:2 * m:2]
+        sums = pair[a]
+        sums += pair[b]
+        mip = (sums >> 2).astype(np.uint8)
+        del a, b, sums
+        self.land_mips = [None, (mip.reshape(-1, 3), m)]
+        for _ in range(2, LAND_MIP_LEVELS):
+            m //= 2
+            src = mip[:2 * m, :2 * m].astype(np.uint16)
+            mip = ((src[0::2, 0::2] + src[1::2, 0::2] + src[0::2, 1::2] + src[1::2, 1::2]) >> 2).astype(np.uint8)
+            self.land_mips.append((mip.reshape(-1, 3), m))
 
     # -- camera ------------------------------------------------------------
 
@@ -120,7 +208,83 @@ class View:
 
     # -- sky and ground ----------------------------------------------------
 
+    def draw_textured(self):
+        world = self.land_rays @ self.rot  # world-space ray directions
+        sin_e = world[..., 1]
+        ground = sin_e < -1e-4
+        # Distance along the ray to the ground, and where it lands.
+        t = self.cam_height / np.where(ground, -sin_e, 1.0)
+        half, inv, n = self.land.land_half_m, self.land_inv_m, self.land_n
+        col = ((self.pos[0] + world[..., 0] * t + half) * inv).astype(np.int32)
+        row = ((self.pos[2] + world[..., 2] * t + half) * inv).astype(np.int32)
+        np.clip(col, 0, n - 1, out=col)
+        np.clip(row, 0, n - 1, out=row)
+        cls = self.land.land[row, col]
+        haze = haze_amount(t) * (LAND_HAZE_STEPS - 1) + self.land_dither + 0.5
+        haze = np.clip(haze, 0, LAND_HAZE_STEPS - 1).astype(np.uint8)
+        sky = self.land_sky0 + np.minimum(sin_e * self.sky_scale, LAND_SKY_STEPS - 1).astype(np.uint8)
+        idx = np.where(ground, cls * LAND_HAZE_STEPS + haze, sky).astype(np.uint8)
+        pygame.surfarray.blit_array(self.land_surface, idx.T)
+        pygame.transform.scale(self.land_surface, (self.w, self.h), self.backdrop)
+        self.surface.blit(self.backdrop, (0, 0))
+
+    def _land_texels(self, level, row, col):
+        """Colors (k, 3) float of texels at integer (row, col) on a mip level."""
+        if level == 0:
+            return self.land_lut[self.land.land[row, col]]
+        mip, m = self.land_mips[level]
+        return mip[row * m + col].astype(np.float32)
+
+    def draw_smooth(self):
+        rays = self.land_rays
+        lh, lw = rays.shape[:2]
+        world = (rays @ self.rot).reshape(-1, 3)
+        sin_e = world[:, 1]
+        sky_i = np.clip((sin_e * self.sky_scale_rgb).astype(np.int32), 0, 255)
+        out = self.sky_lut[sky_i]
+        g = np.nonzero(sin_e < -1e-4)[0]
+        if len(g):
+            w = world[g]
+            down = -w[:, 1]
+            t = self.cam_height / down
+            inv = self.land_inv_m
+            half = self.land.land_half_m
+            # Ground position in level-0 texel units.
+            gx = (self.pos[0] + w[:, 0] * t + half) * inv
+            gz = (self.pos[2] + w[:, 2] * t + half) * inv
+            # Texels per sample: grows with distance and as the ray grazes
+            # the ground (geometric mean of the along- and across-view stretch).
+            texels = t * self.land_pix_angle * inv / np.sqrt(down)
+            level = np.clip(np.log2(np.maximum(texels, 1.0)), 0, LAND_MIP_LEVELS - 1).astype(np.int32)
+            col = np.empty((len(g), 3), np.float32)
+            for lv in range(LAND_MIP_LEVELS):
+                sel = np.nonzero(level == lv)[0]
+                if not len(sel):
+                    continue
+                size = self.land_n if lv == 0 else self.land_mips[lv][1]
+                u = gx[sel] * (1.0 / 2 ** lv) - 0.5
+                v = gz[sel] * (1.0 / 2 ** lv) - 0.5
+                c0 = np.floor(u)
+                r0 = np.floor(v)
+                fu = (u - c0)[:, None]
+                fv = (v - r0)[:, None]
+                c0 = np.clip(c0.astype(np.int32), 0, size - 2)
+                r0 = np.clip(r0.astype(np.int32), 0, size - 2)
+                top = self._land_texels(lv, r0, c0) * (1 - fu) + self._land_texels(lv, r0, c0 + 1) * fu
+                bot = self._land_texels(lv, r0 + 1, c0) * (1 - fu) + self._land_texels(lv, r0 + 1, c0 + 1) * fu
+                col[sel] = top * (1 - fv) + bot * fv
+            f = haze_amount(t)[:, None]
+            out[g] = col * (1 - f) + HAZE * f
+        pygame.surfarray.blit_array(self.land_rgb_surface,
+                                    out.reshape(lh, lw, 3).transpose(1, 0, 2).astype(np.uint8))
+        if (lw, lh) == (self.w, self.h):
+            self.surface.blit(self.land_rgb_surface, (0, 0))
+        else:
+            pygame.transform.smoothscale(self.land_rgb_surface, (self.w, self.h), self.surface)
+
     def draw_sky_and_ground(self):
+        if self.land is not None:
+            return self.draw_smooth() if self.ground_smooth else self.draw_textured()
         # sin(elevation) of every pixel's ray = ray . world-up (in camera space).
         sin_e = self.rays @ self.rot[:, 1]
         # Ground: a ray at elevation -e meets flat ground ~h / sin(e) away.
