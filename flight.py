@@ -18,13 +18,18 @@ from collections import deque
 import feed as feedmod
 from geo import FPM, KT, Projection, wrap_deg
 
-MAX_EXTRAPOLATE_SEC = 20.0  # dead-reckon past the newest report at most this long (rides through dropouts)
-STALE_SEC = 20.0  # no position for this long: the track can't be ridden
+MAX_EXTRAPOLATE_SEC = 10.0  # dead-reckon past the newest report at most this long (rides through dropouts)
+STALE_SEC = 10.0  # no position for this long: the track can't be ridden
 FORGET_SEC = 90.0  # ...and this long: dropped entirely
 HISTORY_SEC = 60.0
 G = 9.81
 MAX_BANK_DEG = 30.0
 CAMERA_BLEND = 0.25  # per-frame smoothing of heading/pitch (at 10fps)
+# The windshield doesn't pitch with the aircraft one for one: a climbing
+# jet would sink the ground to the bottom of the screen. It follows this
+# share of the pitch, and looks down a fixed few degrees, over the nose.
+PITCH_FOLLOW = 0.33
+LOOK_DOWN_DEG = 8.0
 TURN_BASELINE_SEC = 3.0  # turn rate is measured across reports at least this far apart --
 # readsb's track is quantized (~0.35 deg), so over a 1s gap the noise alone reads as ~1 deg/s
 TURN_TAU_SEC = 2.0  # smoothing time constant for the turn rate the bank comes from
@@ -164,6 +169,7 @@ class Camera:
         self.x = self.z = 0.0
         self.y = 500.0
         self.heading = self.pitch = self.bank = 0.0
+        self.view_pitch = 0.0  # the windshield's pitch (see PITCH_FOLLOW)
         self.turn_rate = 0.0  # deg/s, smoothed
         self.gs_kt = self.vs_fpm = 0.0
         self.msl_ft = 0.0
@@ -192,6 +198,7 @@ class Camera:
         self.heading = (self.heading + wrap_deg(heading - self.heading) * k) % 360
         self.pitch += (pitch - self.pitch) * k
         self.bank += (bank - self.bank) * k_bank
+        self.view_pitch = self.pitch * PITCH_FOLLOW - LOOK_DOWN_DEG
         self.gs_kt = speed / KT
         self.vs_fpm = vy / FPM
         self.msl_ft = msl / 0.3048

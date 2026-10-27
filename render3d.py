@@ -69,13 +69,14 @@ def _rgb(c):
     return tuple(int(v) for v in c)
 
 
-def feature_colors(base, slant, horiz, max_dist):
+def feature_colors(base, slant, horiz, max_dist, ground=GROUND_NEAR):
     """Colors for ground features (N, 3 base) seen `slant` meters away along
     the line of sight -- the same haze the ground behind them gets -- and
-    blended into that hazed ground as `horiz` (the horizontal distance)
-    nears the feature's draw distance, so it fades out instead of popping."""
+    blended into that hazed ground (`ground`, its typical color) as `horiz`
+    (the horizontal distance) nears the feature's draw distance, so it
+    fades out instead of popping."""
     fade = np.clip(horiz / max_dist, 0, 1)[:, None] ** 2
-    own, ground = hazed(base, slant), hazed(GROUND_NEAR, slant)
+    own, ground = hazed(base, slant), hazed(ground, slant)
     return (own * (1 - fade) + ground * fade).astype(int).tolist()
 
 
@@ -105,7 +106,11 @@ class View:
         self.backdrop = pygame.Surface((width, height), depth=8)
         self.land = land if land is not None and land.land is not None else None
         self.ground_smooth = ground_filter == "smooth"
+        self.ground_color = GROUND_NEAR  # what features fade into
         if self.land is not None:
+            # The land cover's average color, by area.
+            counts = np.bincount(self.land.land.ravel(), minlength=len(sc.LAND_CLASSES))
+            self.ground_color = (counts[:, None] * np.array(list(sc.LAND_CLASSES.values()), np.float32)).sum(0) / counts.sum()
             self._init_land(ground_scale)
             if self.ground_smooth:
                 self._init_smooth(ground_scale)
@@ -309,7 +314,15 @@ class View:
         # Skip lakes wholly behind the camera: bbox center's forward distance plus its size.
         fx, fz = math.sin(math.radians(self.heading)), math.cos(math.radians(self.heading))
         ahead = ((bb[:, 0] + bb[:, 2]) / 2 - cx) * fx + ((bb[:, 1] + bb[:, 3]) / 2 - cz) * fz > -size
-        lakes = np.nonzero((dists < sc.LAKE_DISTANCE_M) & (px_wide > MIN_LAKE_PX) & ahead)[0]
+        # One flat color per lake, hazed for its middle distance, is only
+        # right for a lake that's all about the same distance away. Over the
+        # textured ground (which has the lakes in it, hazed per pixel), only
+        # lakes wholly within LAND_LAKE_DISTANCE_M get a crisp outline drawn.
+        far = np.hypot(np.maximum(np.abs(bb[:, 0] - cx), np.abs(bb[:, 2] - cx)),
+                       np.maximum(np.abs(bb[:, 1] - cz), np.abs(bb[:, 3] - cz)))
+        reach = far if self.land is not None else dists
+        max_dist = sc.LAND_LAKE_DISTANCE_M if self.land is not None else sc.LAKE_DISTANCE_M
+        lakes = np.nonzero((reach < max_dist) & (px_wide > MIN_LAKE_PX) & ahead)[0]
         if not len(lakes):
             return
         # Every candidate lake's outline in one transform, like draw_lines.
@@ -326,9 +339,12 @@ class View:
         lo_y, hi_y = np.minimum.reduceat(scr[:, 1], first), np.maximum.reduceat(scr[:, 1], first)
         on = (zmax > NEAR) & (hi_x >= 0) & (lo_x <= self.w) & (hi_y >= 0) & (lo_y <= self.h)
         simple = on & (zmin >= NEAR) & (lo_x > -self.w) & (hi_x < 2 * self.w) & (lo_y > -self.h) & (hi_y < 2 * self.h)
-        horiz = dists[lakes]
+        horiz = (dists[lakes] + far[lakes]) / 2 if self.land is not None else dists[lakes]
         slant = np.hypot(horiz, self.cam_height)
-        colors = feature_colors(np.array(sc.LAKE_COLOR, np.float32), slant, horiz, sc.LAKE_DISTANCE_M)
+        if self.land is not None:  # no fade: the ground under it is the same hazed water
+            colors = hazed(np.array(sc.LAKE_COLOR, np.float32), slant).astype(int).tolist()
+        else:
+            colors = feature_colors(np.array(sc.LAKE_COLOR, np.float32), slant, horiz, max_dist)
         draw = pygame.draw.polygon
         for k in np.nonzero(on)[0]:
             a, b = bounds[k], bounds[k + 1]
@@ -368,9 +384,11 @@ class View:
         symin = np.minimum.reduceat(scr[:, 1], first)
         symax = np.maximum.reduceat(scr[:, 1], first)
         max_dist = STYLE_DIST[style]
-        # Line-of-sight distance to each chunk's nearest point, and the horizontal part of it.
-        slant = np.sqrt(np.minimum.reduceat((cam * cam).sum(axis=1), first))
-        horiz = np.sqrt(np.maximum(slant * slant - self.cam_height ** 2, 0))
+        # Line-of-sight distance to each chunk's nearest point (for culling),
+        # and its average (for the one haze color the chunk is drawn in).
+        d2 = (cam * cam).sum(axis=1)
+        horiz = np.sqrt(np.maximum(np.minimum.reduceat(d2, first) - self.cam_height ** 2, 0))
+        slant = np.add.reduceat(np.sqrt(d2), first) / lens
         on = ((zmax > NEAR) & (sxmax >= 0) & (sxmin <= self.w) & (symax >= 0) & (symin <= self.h)
               & (horiz < max_dist))
         draw_lines, draw_line = pygame.draw.lines, pygame.draw.line
@@ -380,7 +398,9 @@ class View:
         # Plain lists for the per-chunk loop: indexing numpy one scalar at a
         # time costs more than the drawing on the Pi.
         widths = STYLE_WIDTH.tolist()
-        colors = feature_colors(STYLE_BASE[style[visible]], slant[visible], horiz[visible], max_dist[visible])
+        mid = np.sqrt(np.maximum(slant[visible] ** 2 - self.cam_height ** 2, 0))
+        colors = feature_colors(STYLE_BASE[style[visible]], slant[visible], mid, max_dist[visible],
+                                self.ground_color)
         for k, a, b, st, c, near_ok in zip(visible.tolist(), bounds[visible].tolist(),
                                            bounds[visible + 1].tolist(), style[visible].tolist(),
                                            colors, (zmin[visible] >= NEAR).tolist()):
@@ -400,10 +420,121 @@ class View:
                     draw_line(surf, c, sp.tolist(), sq.tolist(), width)
         return len(visible)
 
+    def draw_buildings(self, world):
+        """The skyline, painter's algorithm: pieces far to near, each piece's
+        camera-facing walls far to near, then its roof if seen from above.
+        Culling, transform, shading and the draw order are all done in one
+        numpy pass over every wall; only the pygame calls loop."""
+        b = world.buildings
+        if b is None:
+            return 0
+        cx, cy, cz = (float(v) for v in self.pos)
+        rel = b.center - (cx, cz)
+        dist = np.hypot(rel[:, 0], rel[:, 1])
+        fx, fz = math.sin(math.radians(self.heading)), math.cos(math.radians(self.heading))
+        ahead = rel[:, 0] * fx + rel[:, 1] * fz > -b.radius - 50.0
+        tall_px = self.focal * b.y1 / np.maximum(dist, 1.0)
+        keep = (dist - b.radius < sc.BUILDING_DISTANCE_M) & ahead & (tall_px > 1.0)
+        if not keep.any():
+            return 0
+        slant = np.hypot(dist, cy - (b.y0 + b.y1) / 2)
+        haze = haze_amount(slant)
+
+        # Walls: in a kept piece and facing the camera.
+        to_cam = np.stack([cx - b.mid[:, 0], cz - b.mid[:, 1]], -1)
+        walls = np.nonzero(keep[b.piece] & ((b.normal * to_cam).sum(1) > 0))[0]
+        pc = b.piece[walls]
+        cam = self.to_camera(b.wall_quads[walls])  # (k, 4, 3)
+        zmin = cam[..., 2].min(1)
+        scr = self.to_screen(cam)
+        sx, sy = scr[..., 0], scr[..., 1]
+        on = ((cam[..., 2].max(1) > NEAR) & (sx.max(1) >= 0) & (sx.min(1) <= self.w)
+              & (sy.max(1) >= 0) & (sy.min(1) <= self.h))
+        # Thinner than a pixel on screen (far, edge-on): not worth a polygon.
+        on &= (zmin < NEAR) | (sx.max(1) - sx.min(1) > 0.8)
+        f = haze[pc][:, None]
+        colors = b.color[pc] * b.shade[walls][:, None] * (1 - f) + HAZE * f
+        wall_d = np.hypot(to_cam[walls, 0], to_cam[walls, 1])
+
+        # Roofs of kept pieces seen from above, drawn after their own walls:
+        # every candidate's ring in one transform, like draw_lakes.
+        roofs = np.nonzero(keep & (b.y1 < cy))[0]
+        starts, ends = b.start[roofs], b.start[roofs + 1]
+        lens = ends - starts
+        idx = np.repeat(starts - np.concatenate([[0], np.cumsum(lens)[:-1]]), lens) + np.arange(lens.sum())
+        rp = np.empty((len(idx), 3), np.float32)
+        rp[:, 0], rp[:, 1], rp[:, 2] = b.top[idx, 0], np.repeat(b.y1[roofs], lens), b.top[idx, 1]
+        rcam = self.to_camera(rp)
+        rscr = self.to_screen(rcam)
+        bounds = np.concatenate([[0], np.cumsum(lens)]).astype(np.int64)
+        if len(roofs):
+            first = bounds[:-1]
+            r_near = np.minimum.reduceat(rcam[:, 2], first) < NEAR
+            r_on = ((np.maximum.reduceat(rcam[:, 2], first) > NEAR)
+                    & (np.maximum.reduceat(rscr[:, 0], first) >= 0) & (np.minimum.reduceat(rscr[:, 0], first) <= self.w)
+                    & (np.maximum.reduceat(rscr[:, 1], first) >= 0) & (np.minimum.reduceat(rscr[:, 1], first) <= self.h))
+            keep_r = np.nonzero(r_on)[0]
+        else:
+            r_near = np.zeros(0, bool)
+            keep_r = np.zeros(0, np.int64)
+        f = haze[roofs][:, None]
+        roof_colors = np.minimum(b.color[roofs] * 1.06, 255) * (1 - f) + HAZE * f
+
+        # One draw order: piece far -> near, then within a piece walls far ->
+        # near, roof last.
+        piece_key = np.concatenate([dist[pc[on]], dist[roofs[keep_r]]])
+        within = np.concatenate([wall_d[on], np.full(len(keep_r), -1.0)])
+        order = np.lexsort((-within, -piece_key))
+        n_on = int(on.sum())
+        wall_idx = np.nonzero(on)[0]
+
+        draw = pygame.draw.polygon
+        surf = self.surface
+        w_pts = scr[on].tolist()
+        w_near = (zmin[on] < NEAR).tolist()
+        w_colors = colors[on].astype(int).tolist()
+        r_colors = roof_colors.astype(int).tolist()
+        r_pts = rscr.tolist()
+        r_bounds = bounds.tolist()
+        r_near_l = r_near.tolist()
+        keep_r_l = keep_r.tolist()
+        drawn = 0
+        for o in order.tolist():
+            if o < n_on:
+                if w_near[o]:
+                    poly = _clip_near(cam[wall_idx[o]])
+                    if len(poly) < 3:
+                        continue
+                    pts = _clip_rect(self.to_screen(poly), -2, -2, self.w + 2, self.h + 2)
+                    if len(pts) < 3:
+                        continue
+                    pts = pts.tolist()
+                else:
+                    pts = w_pts[o]
+                draw(surf, w_colors[o], pts)
+            else:
+                r = keep_r_l[o - n_on]
+                a, e = r_bounds[r], r_bounds[r + 1]
+                if r_near_l[r]:  # the camera is over this roof's edge
+                    poly = _clip_near(rcam[a:e])
+                    if len(poly) < 3:
+                        continue
+                    pts = _clip_rect(self.to_screen(poly), -2, -2, self.w + 2, self.h + 2)
+                    if len(pts) < 3:
+                        continue
+                    pts = pts.tolist()
+                else:
+                    pts = r_pts[a:e]
+                draw(surf, r_colors[r], pts)
+            drawn += 1
+        return drawn
+
     def render(self, world):
         self.draw_sky_and_ground()
         self.draw_lakes(world)
-        return self.draw_lines(world.lines)
+        n = self.draw_lines(world.lines)
+        self.draw_buildings(world)
+        return n
 
 
 def _clip_rect(poly, x0, y0, x1, y1):

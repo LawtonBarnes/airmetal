@@ -10,7 +10,8 @@ The wall is one 1024x768 frame from a Raspberry Pi 3B+, split into four
 
 - **Top two tubes: the windshield.** A flat-shaded, 1990-style 3D view from
   the cockpit of the aircraft being ridden: sky with haze, textured ground,
-  and OpenStreetMap roads, rail, rivers and lakes out to 60 NM. The ground is
+  OpenStreetMap roads, rail, rivers and lakes out to 60 NM, and the skyline
+  (every building 60 m and up, from OSM, Reunion Tower's ball included). The ground is
   real land cover (USGS NLCD 2021 -- tree-canopy neighborhoods, commercial
   roofs, forest, pasture, water), looked up per pixel where each view ray
   meets the ground, SNES "Mode 7" style, blended and mipmapped so it doesn't
@@ -28,18 +29,25 @@ P4's readsb (the SDR that JOAN JET shows), polled over HTTP once a second:
 instead of guessing ahead of them; pitch, bank and turn rate come from the
 track itself.
 
-**The director** picks what to ride: aircraft inbound to the Metal Shop,
-scored on how close they'll pass, how low, how soon, and how steadily
-they're being received. A ride runs until the aircraft is 2 NM past its
-closest point, then hands off (a callsign card shows for a few seconds).
-With nothing worth riding, standby hovers 400 ft over the shop, panning
-across White Rock Lake toward downtown.
+**The director** picks what to ride, from aircraft within 9 NM of the
+Metal Shop (farther out, JOAN JET's overlay covers them and the windshield
+is mostly haze): helicopters first, then light aircraft and anything below
+3,000 ft, then the rest -- nearest first within each, heading away counts
+against. A ride runs until the aircraft leaves 9 NM heading away or its
+signal is gone (10s of dead reckoning first), and a helicopter or light
+aircraft cuts in on anything else after 45s. With nothing in range,
+standby hovers 400 ft over the shop, panning across White Rock Lake toward
+downtown.
+
+The windshield looks 8 degrees down over the nose and follows only a third
+of the aircraft's pitch (the attitude indicator shows all of it), so a
+climb-out doesn't sink the ground to the bottom of the screen.
 
 ## Controls
 
 | Key | Action |
 |---|---|
-| Left / Right | Previous / next aircraft in the director's ranking |
+| Left / Right | Cycle the 5 nearest aircraft (JOAN JET's NEARBY list) |
 | Back | ABOUT screen (feed, aircraft tracked, ride, settings) |
 | Power | Shutdown dialog |
 | Home | Quit to SCRUTE |
@@ -79,6 +87,8 @@ Esc/Q = quit.
   basemap (PC only).
 - `tools/build_landcover.py` -- builds `data/landcover_*.npz` (32 m land
   classes, +-112 km) from NLCD via MRLC's map server (PC only).
+- `tools/build_buildings.py` -- builds `data/buildings_*.npz` (the
+  skyline) from OpenStreetMap via Overpass (PC only).
 - `tools/bench_mode7.py` -- the textured-ground cost spike.
 - `tools/director_trace.py` -- replays a recording through the director
   and lists every ride it would take.

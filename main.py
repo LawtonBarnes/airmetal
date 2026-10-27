@@ -113,7 +113,7 @@ class App:
     def handle(self, action):
         """One remote action. Returns False to quit. The fleet key map: Home
         back to SCRUTE, Q/Esc/Menu quit, BACK toggles ABOUT, Power opens the
-        shutdown dialog; Left/Right pick the previous/next aircraft."""
+        shutdown dialog; Left/Right cycle the nearest aircraft."""
         if self.power_dialog is not None:
             return self._handle_power_dialog(action)
         if action == "home":
@@ -171,7 +171,7 @@ class App:
     # -- choosing an aircraft ----------------------------------------------
 
     def pick(self, now, step):
-        """Remote Left/Right: previous/next aircraft in the director's ranking."""
+        """Remote Left/Right: previous/next of the nearest aircraft (JOAN JET's NEARBY)."""
         self._switched_to(self.director.step(self.traffic, now, now - self.s["delay_sec"], step))
 
     def _switched_to(self, hex_):
@@ -207,6 +207,7 @@ class App:
         c.heading = STANDBY_CAM["heading0"] + STANDBY_CAM["pan_deg"] * math.sin(
             2 * math.pi * time.time() / STANDBY_CAM["pan_sec"])
         c.pitch, c.bank, c.turn_rate, c.gs_kt, c.vs_fpm = STANDBY_CAM["pitch"], 0.0, 0.0, 0.0, 0.0
+        c.view_pitch = c.pitch
         c.msl_ft = (self.s["ground_msl_m"] + c.y) / 0.3048
         return None
 
@@ -263,7 +264,7 @@ class App:
             if self.about is not None:
                 top = self.about.copy() if self.power_dialog is not None else self.about
             else:
-                self.view.set_camera(c.x, c.y, c.z, c.heading, c.pitch, c.bank)
+                self.view.set_camera(c.x, c.y, c.z, c.heading, c.view_pitch, c.bank)
                 self.view.render(self.world)
                 pygame.transform.scale(self.view.surface, (config.FRAME_W, config.VIEW_H), self.view_big)
                 if track is not None and time.time() < self.handoff_until:

@@ -8,8 +8,11 @@ to 60 NM -- in local meters, simplified for a 512x192 view).
     draws each with one pygame.draw.lines call;
   * lakes -> outline rings with bounding boxes.
 
-Plus, if data/landcover_<lat>_<lon>.npz exists (tools/build_landcover.py),
-the land-cover raster the textured ground is looked up in.
+Plus, if they exist:
+  * data/landcover_<lat>_<lon>.npz (tools/build_landcover.py) -- the
+    land-cover raster the textured ground is looked up in;
+  * data/buildings_<lat>_<lon>.npz (tools/build_buildings.py) -- the
+    skyline: tall buildings as extruded (sometimes tapered) footprints.
 """
 import glob
 import math
@@ -39,9 +42,16 @@ LINE_STYLES = {
 }
 LAKE_COLOR = WATER_COLOR
 LAKE_DISTANCE_M = 40000
+LAND_LAKE_DISTANCE_M = 10000  # over textured ground: only lakes wholly this close get outlines
 
 # Textured ground (data/landcover_*.npz, tools/build_landcover.py from NLCD):
 # land class -> base color, before haze. Order = the index stored in the raster.
+# Skyline: sunlight comes from here (horizontal unit vector, x east / z
+# north) -- walls facing it are lit, the rest in shade.
+SUN_DIR = (-0.42, -0.91)  # from the south-southwest
+WALL_SHADE = (0.58, 1.0)  # brightness facing away from the sun .. facing it
+BUILDING_DISTANCE_M = 45000
+
 LAND_M_PER_PX = 32.0
 LAND_CLASSES = {
     "water": WATER_COLOR,
@@ -106,6 +116,46 @@ class Lines:
         return np.concatenate(ranges) if ranges else np.zeros(0, np.int64)
 
 
+class Buildings:
+    """Pieces: a footprint ring (`bottom` at y0, `top` at y1 -- the same ring
+    unless the piece tapers), counter-clockwise from above. Wall i runs from
+    ring point i to i+1."""
+
+    def __init__(self, data):
+        self.bottom, self.top = data["bottom"], data["top"]
+        self.start = data["starts"]
+        self.y0, self.y1 = data["y0"], data["y1"]
+        self.color = data["color"].astype(np.float32)
+        self.attribution = str(data["attribution"])
+        n = len(self.y0)
+        self.center = np.array([self.bottom[self.start[k]:self.start[k + 1]].mean(0) for k in range(n)],
+                               np.float32).reshape(-1, 2)
+        self.radius = np.array([np.hypot(*(np.vstack([self.bottom[self.start[k]:self.start[k + 1]],
+                                                       self.top[self.start[k]:self.start[k + 1]]])
+                                           - self.center[k]).T).max() for k in range(n)], np.float32)
+        # Per wall: outward unit normal (horizontal) and its sun shading.
+        nxt = np.arange(len(self.bottom)) + 1
+        for k in range(n):
+            nxt[self.start[k + 1] - 1] = self.start[k]
+        self.next = nxt
+        edge = self.bottom[nxt] - self.bottom
+        normal = np.stack([edge[:, 1], -edge[:, 0]], -1)
+        normal /= np.maximum(np.hypot(normal[:, 0], normal[:, 1]), 1e-6)[:, None]
+        self.normal = normal.astype(np.float32)
+        lit = np.clip(normal @ np.array(SUN_DIR, np.float32), 0, 1)
+        self.shade = (WALL_SHADE[0] + (WALL_SHADE[1] - WALL_SHADE[0]) * lit).astype(np.float32)
+        self.mid = ((self.bottom + self.bottom[nxt]) / 2).astype(np.float32)
+        # Every wall as a world-space quad: bottom i, bottom i+1, top i+1, top i.
+        self.piece = np.repeat(np.arange(n), np.diff(self.start))
+        y0, y1 = self.y0[self.piece], self.y1[self.piece]
+        q = np.empty((len(self.bottom), 4, 3), np.float32)
+        for j, (ring, idx, y) in enumerate(((self.bottom, None, y0), (self.bottom, nxt, y0),
+                                            (self.top, nxt, y1), (self.top, None, y1))):
+            pts = ring if idx is None else ring[idx]
+            q[:, j, 0], q[:, j, 1], q[:, j, 2] = pts[:, 0], y, pts[:, 1]
+        self.wall_quads = q
+
+
 class Scenery:
     def __init__(self, data_dir, lat, lon):
         data = np.load(self._find(data_dir, lat, lon))
@@ -126,6 +176,11 @@ class Scenery:
             self.land_m_per_px = float(lc["m_per_px"])
             self.land_half_m = float(lc["half_m"])
             self.attribution += "; " + str(lc["attribution"])
+        self.buildings = None
+        path = self._find(data_dir, lat, lon, "buildings", required=False)
+        if path:
+            self.buildings = Buildings(np.load(path))
+            self.attribution += "; " + self.buildings.attribution
 
     @staticmethod
     def _find(data_dir, lat, lon, kind="scenery", required=True):
