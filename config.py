@@ -46,6 +46,9 @@ DEFAULTS = {
         # "smooth": blended texels + mipmaps, no shimmer in motion.
         # "nearest": chunky one-texel samples (cheaper, "digital camo").
         "ground_filter": "smooth",
+        # Color saturation of the whole scene, x the drone-matched colors
+        # (1 = as photographed, which reads a little muted on the CRTs).
+        "saturation": "1.7",
         # Pyramid trees on wooded land near the camera, below ~2,100 ft on the
         # altimeter. Off: tried 2026-10-27, too pointy and sparse to read as
         # trees, and denser costs too much on a Pi 3B+.
@@ -72,6 +75,7 @@ def load():
         "ground_scale": cp.getint("view", "ground_scale"),
         "ground_filter": cp.get("view", "ground_filter"),
         "trees": cp.getboolean("view", "trees"),
+        "saturation": cp.getfloat("view", "saturation"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),
     }

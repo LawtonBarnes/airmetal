@@ -38,10 +38,11 @@ import scenery as sc
 
 NEAR = 5.0  # m -- anything closer is clipped away
 
-SKY_BANDS = [  # (degrees above the horizon, color) -- gradient anchors
-    (0.0, (176, 204, 232)), (1.5, (160, 194, 230)), (3.5, (140, 182, 228)),
-    (6.0, (120, 168, 226)), (9.0, (100, 154, 224)), (13.0, (82, 140, 222)),
-    (18.0, (66, 126, 218)), (25.0, (52, 112, 212)), (35.0, (42, 100, 206)),
+SKY_BANDS = [  # (degrees above the horizon, color) -- gradient anchors, matched
+    # to the drone shots (2026-10-27): a pale, grayish horizon, blue only higher up
+    (0.0, (176, 196, 218)), (3.5, (162, 188, 216)), (6.0, (150, 181, 215)),
+    (12.0, (132, 169, 212)), (20.0, (106, 151, 208)), (30.0, (82, 133, 204)),
+    (40.0, (66, 120, 200)),
 ]
 HAZE = np.array(SKY_BANDS[0][1], np.float32)
 GROUND_NEAR = np.array((88, 132, 62), np.float32)
@@ -64,6 +65,34 @@ def haze_amount(d):
 def hazed(color, d):
     f = haze_amount(d)[..., None]
     return np.asarray(color, np.float32) * (1 - f) + HAZE * f
+
+
+def _vivid(c, s):
+    """Color(s) with saturation scaled by s around their own luma."""
+    c = np.asarray(c, np.float32)
+    luma = (c * np.array([0.299, 0.587, 0.114], np.float32)).sum(-1, keepdims=True)
+    return np.clip(luma + (c - luma) * s, 0, 255)
+
+
+def set_saturation(s, world=None):
+    """Scales the saturation of every scene color -- sky, haze, land cover,
+    water, lines, trees and (given the Scenery) buildings -- from the
+    drone-matched originals. Call once, before building a View."""
+    global SKY_BANDS
+    if s == 1.0:
+        return
+    SKY_BANDS = [(e, tuple(_vivid(c, s))) for e, c in SKY_BANDS]
+    HAZE[:] = SKY_BANDS[0][1]
+    GROUND_NEAR[:] = _vivid(GROUND_NEAR, s)
+    STYLE_BASE[:] = _vivid(STYLE_BASE, s)
+    for k, c in sc.LAND_CLASSES.items():
+        sc.LAND_CLASSES[k] = tuple(_vivid(c, s))
+    sc.LAKE_COLOR = tuple(_vivid(sc.LAKE_COLOR, s))
+    for k, c in sc.TREE_COLOR.items():
+        sc.TREE_COLOR[k] = tuple(_vivid(c, s))
+    sc.TREE_COLOR_DEFAULT = tuple(_vivid(sc.TREE_COLOR_DEFAULT, s))
+    if world is not None and world.buildings is not None:
+        world.buildings.color = _vivid(world.buildings.color, s)
 
 
 def _rgb(c):

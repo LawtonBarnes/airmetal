@@ -24,7 +24,7 @@ CELL_M = 2000.0
 GRID_HALF = 56  # cells each side of the origin: +-112 km covers the 60 NM basemap
 CHUNK_POINTS = 12  # max points per drawn chunk
 
-WATER_COLOR = (52, 92, 172)  # lakes, rivers and canals alike
+WATER_COLOR = (74, 104, 138)  # lakes, rivers and canals alike: steel blue, per the drone shots
 
 # Line layers: (color, width px at 512x192, draw distance m). Draw order is
 # this order -- rivers under roads, big roads last so they win at crossings.
@@ -57,18 +57,20 @@ LAND_CLASSES = {
     "water": WATER_COLOR,
     # From the drone shots: neighborhoods read as tree canopy, commercial
     # areas as pale roofs and parking.
-    # A shade darker than first tried, for separation from the sky.
-    "developed_open": (92, 122, 60),  # parks, golf courses, big lawns
-    "developed_low": (63, 87, 48),  # tree-shaded neighborhoods
-    "developed_medium": (88, 95, 75),  # canopy + roofs
+    # A shade darker than first tried, for separation from the sky; then
+    # vegetation matched to the drone shots (2026-10-27): real canopy is a
+    # dark olive, much less saturated than the first greens.
+    "developed_open": (81, 95, 65),  # parks, golf courses, big lawns
+    "developed_low": (57, 68, 49),  # tree-shaded neighborhoods
+    "developed_medium": (77, 80, 70),  # canopy + roofs
     "developed_high": (143, 139, 131),  # downtown, malls, the airports' aprons
     "barren": (145, 133, 107),
-    "forest": (46, 77, 37),
-    "evergreen": (34, 66, 36),
-    "grass": (124, 126, 73),
-    "pasture": (104, 124, 61),
-    "crops": (126, 109, 70),
-    "wetland": (66, 94, 66),
+    "forest": (43, 58, 39),
+    "evergreen": (34, 50, 35),
+    "grass": (103, 104, 78),
+    "pasture": (88, 98, 68),
+    "crops": (101, 93, 74),
+    "wetland": (62, 75, 62),
 }
 
 # Trees: low-altitude rides get pyramid trees on the wooded land classes,

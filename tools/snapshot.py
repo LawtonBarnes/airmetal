@@ -23,6 +23,7 @@ pygame.init()
 s = config.load()
 t0 = time.perf_counter()
 world = scenery.Scenery(config.DATA_DIR, s["lat"], s["lon"])
+render3d.set_saturation(s["saturation"], world)
 t1 = time.perf_counter()
 view = render3d.View(config.VIEW_LOW_W, config.VIEW_LOW_H, s["fov_deg"], world, s["ground_scale"],
                      s["ground_filter"])
