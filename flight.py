@@ -34,6 +34,8 @@ TURN_BASELINE_SEC = 3.0  # turn rate is measured across reports at least this fa
 # readsb's track is quantized (~0.35 deg), so over a 1s gap the noise alone reads as ~1 deg/s
 TURN_TAU_SEC = 2.0  # smoothing time constant for the turn rate the bank comes from
 BANK_TAU_SEC = 1.0  # ...and for the bank itself
+GAUGE_TAU_SEC = 1.5  # smoothing for the speed/altitude/climb readouts: the speed off the
+# interpolated curve wobbles at each report, and altitude comes in 25 ft steps
 
 
 class Track:
@@ -199,6 +201,7 @@ class Camera:
         self.pitch += (pitch - self.pitch) * k
         self.bank += (bank - self.bank) * k_bank
         self.view_pitch = self.pitch * PITCH_FOLLOW - LOOK_DOWN_DEG
-        self.gs_kt = speed / KT
-        self.vs_fpm = vy / FPM
-        self.msl_ft = msl / 0.3048
+        k_gauge = 1.0 if fresh else 1 - math.exp(-dt / GAUGE_TAU_SEC)
+        self.gs_kt += (speed / KT - self.gs_kt) * k_gauge
+        self.vs_fpm += (vy / FPM - self.vs_fpm) * k_gauge
+        self.msl_ft += (msl / 0.3048 - self.msl_ft) * k_gauge
