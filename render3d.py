@@ -34,6 +34,7 @@ import math
 import numpy as np
 import pygame
 
+import daylight
 import scenery as sc
 
 NEAR = 5.0  # m -- anything closer is clipped away
@@ -62,9 +63,31 @@ def haze_amount(d):
     return np.clip(np.asarray(d, np.float32) / VISIBILITY_M, 0.0, 1.0) ** 0.75
 
 
-def hazed(color, d):
+# Time of day (set by View.set_lighting; daytime = no change): every lit
+# color is multiplied by LIGHT, and LIGHTS_ON (0..1) brings up the scene's
+# own lights -- land-cover glow, street/runway lights, windows.
+LIGHT = np.ones(3, np.float32)
+LIGHTS_ON = np.zeros(1, np.float32)
+# City light, per unit of LAND_EMIT: sodium orange where it's faint,
+# warming toward yellow-white where it's brightest.
+NIGHT_GLOW = np.array((1.0, 0.50, 0.10), np.float32)
+NIGHT_GLOW_HOT = np.array((1.0, 0.80, 0.40), np.float32)
+STAR_COUNT = 260
+SKY_AZ_STEPS = 129  # the sky's glow: directions from away from the sun to toward it (fine enough to hide the steps)
+
+
+def _glow(e):
+    """City light rgb (k, 3) for land emission e (k, 1), 0..255."""
+    return e * (NIGHT_GLOW + (NIGHT_GLOW_HOT - NIGHT_GLOW) * (e / 255.0))
+
+
+def hazed(color, d, emit=None):
+    """Lit (and, with `emit`, self-lit) color(s) seen d meters away."""
     f = haze_amount(d)[..., None]
-    return np.asarray(color, np.float32) * (1 - f) + HAZE * f
+    c = np.asarray(color, np.float32) * LIGHT
+    if emit is not None:
+        c = c + np.asarray(emit, np.float32) * LIGHTS_ON
+    return c * (1 - f) + HAZE * f
 
 
 def _vivid(c, s):
@@ -99,20 +122,21 @@ def _rgb(c):
     return tuple(int(v) for v in c)
 
 
-def feature_colors(base, slant, horiz, max_dist, ground=GROUND_NEAR):
+def feature_colors(base, slant, horiz, max_dist, ground=GROUND_NEAR, emit=None):
     """Colors for ground features (N, 3 base) seen `slant` meters away along
     the line of sight -- the same haze the ground behind them gets -- and
     blended into that hazed ground (`ground`, its typical color) as `horiz`
     (the horizontal distance) nears the feature's draw distance, so it
     fades out instead of popping."""
     fade = np.clip(horiz / max_dist, 0, 1)[:, None] ** 2
-    own, ground = hazed(base, slant), hazed(ground, slant)
-    return (own * (1 - fade) + ground * fade).astype(int).tolist()
+    own, ground = hazed(base, slant, emit), hazed(ground, slant)
+    return np.minimum(own * (1 - fade) + ground * fade, 255).astype(int).tolist()
 
 
 STYLE_BASE = np.array([c for c, _, _ in sc.LINE_STYLES.values()], np.float32)
 STYLE_WIDTH = np.array([w for _, w, _ in sc.LINE_STYLES.values()])
 STYLE_DIST = np.array([d for _, _, d in sc.LINE_STYLES.values()], np.float32)
+STYLE_EMIT = np.array([sc.LINE_EMIT.get(k, (0, 0, 0)) for k in sc.LINE_STYLES], np.float32)
 
 
 def _sky_palette(steps):
@@ -136,6 +160,17 @@ class View:
         self.backdrop = pygame.Surface((width, height), depth=8)
         self.land = land if land is not None and land.land is not None else None
         self.ground_smooth = ground_filter == "smooth"
+        self.lighting = daylight.lighting_at(90.0, 0.0)  # plain day until set_lighting
+        self.sun_dir = (0.0, -1.0)
+        self.day_haze = HAZE.copy()
+        # Stars: fixed directions on the sky (world space), and brightnesses.
+        rng = np.random.default_rng(7)
+        z = rng.uniform(math.sin(math.radians(4)), 1.0, STAR_COUNT)  # sin(elevation)
+        a = rng.uniform(0, 2 * math.pi, STAR_COUNT)
+        r = np.sqrt(1 - z * z)
+        self.star_dirs = np.stack([r * np.sin(a), z, r * np.cos(a)], -1).astype(np.float32)
+        # Few bright, many faint; dimmer low down, in the haze.
+        self.star_bright = (130 + 125 * rng.random(STAR_COUNT) ** 2) * np.clip(z / math.sin(math.radians(20)), 0.25, 1)
         self.ground_color = GROUND_NEAR  # what features fade into
         self.tree_chance = None  # per land class, or None: no trees
         if self.land is not None:
@@ -151,14 +186,24 @@ class View:
             if self.ground_smooth:
                 self._init_smooth(ground_scale)
             return
+        self._flat_palette()
+        self.sky_scale = (SKY_STEPS - 1) / math.sin(math.radians(SKY_TOP_DEG))
+
+    def _sky_1d(self, steps):
+        """The sky gradient for the 8-bit palettes: no sun-side glow, the
+        directions away from and toward the sun averaged."""
+        lut = self.lighting.sky_lut(np.array(_sky_palette(steps), np.float32), SKY_AZ_STEPS, steps,
+                                    math.sin(math.radians(SKY_TOP_DEG)))
+        return [_rgb(np.clip(c, 0, 255)) for c in lut.mean(0)]
+
+    def _flat_palette(self):
         # Palette: 0..GROUND_STEPS-1 = ground, haze fraction 0 -> 1 (the index is
         # linear in distance / VISIBILITY_M, so each entry carries haze_amount's
         # curve); then the sky, linear in sin(elevation) from the horizon up.
         u = np.arange(GROUND_STEPS) / (GROUND_STEPS - 1)
         pal = [_rgb(hazed(GROUND_NEAR, k * VISIBILITY_M)) for k in u]
-        pal += _sky_palette(SKY_STEPS)
+        pal += self._sky_1d(SKY_STEPS)
         self.backdrop.set_palette(pal)
-        self.sky_scale = (SKY_STEPS - 1) / math.sin(math.radians(SKY_TOP_DEG))
 
     def _rays(self, w, h, scale):
         """Unit view rays (h, w, 3) through the centers of a w x h grid of
@@ -171,29 +216,37 @@ class View:
         lw, lh = self.w // scale, self.h // scale
         self.land_rays = self._rays(lw, lh, scale)
         self.land_surface = pygame.Surface((lw, lh), depth=8)
-        pal = []
-        for base in sc.LAND_CLASSES.values():
-            f = np.arange(LAND_HAZE_STEPS)[:, None] / (LAND_HAZE_STEPS - 1)
-            pal += [_rgb(c) for c in np.asarray(base, np.float32) * (1 - f) + HAZE * f]
-        pal += _sky_palette(LAND_SKY_STEPS)
-        self.land_surface.set_palette(pal)
-        self.backdrop.set_palette(pal)
+        pal = self._land_palette()
         self.sky_scale = (LAND_SKY_STEPS - 1) / math.sin(math.radians(SKY_TOP_DEG))
         self.land_dither = np.tile(BAYER4, (lh // 4 + 1, lw // 4 + 1))[:lh, :lw]
         self.land_sky0 = len(pal) - LAND_SKY_STEPS
         self.land_inv_m = 1.0 / self.land.land_m_per_px
         self.land_n = self.land.land.shape[0]
 
+    def _land_palette(self):
+        pal = []
+        for name, base in sc.LAND_CLASSES.items():
+            f = np.arange(LAND_HAZE_STEPS)[:, None] / (LAND_HAZE_STEPS - 1)
+            lit = np.asarray(base, np.float32) * LIGHT + _glow(np.float32(sc.LAND_EMIT.get(name, 0))) * LIGHTS_ON
+            pal += [_rgb(np.minimum(c, 255)) for c in lit * (1 - f) + HAZE * f]
+        pal += self._sky_1d(LAND_SKY_STEPS)
+        self.land_surface.set_palette(pal)
+        self.backdrop.set_palette(pal)
+        return pal
+
     def _init_smooth(self, scale):
         lw, lh = self.w // scale, self.h // scale
         self.land_rgb_surface = pygame.Surface((lw, lh), depth=32)
-        self.land_lut = np.array(list(sc.LAND_CLASSES.values()), np.float32)
-        self.sky_lut = np.array(_sky_palette(256), np.float32)
+        # Per class: color, then its own night light (scenery.LAND_EMIT).
+        self.land_lut = np.array([tuple(c) + (sc.LAND_EMIT.get(k, 0),) for k, c in sc.LAND_CLASSES.items()],
+                                 np.float32)
+        self.day_sky = np.array(_sky_palette(256), np.float32)
+        self.sky_lut = self.lighting.sky_lut(self.day_sky, SKY_AZ_STEPS, 256, math.sin(math.radians(SKY_TOP_DEG)))
         self.sky_scale_rgb = 255 / math.sin(math.radians(SKY_TOP_DEG))
         # Ground meters covered by one sample, per meter of ray length: the
         # sample's angular size (scale pixels).
         self.land_pix_angle = scale / self.focal
-        # Mip levels 1..: box-averaged class colors, (size*size, 3) uint8.
+        # Mip levels 1..: box-averaged class colors + night light, (size*size, 4) uint8.
         # Level 0 stays the class raster (colors looked up on the fly).
         # Level 1 straight from the classes: each 2x2 block's four colors,
         # looked up through a (class, class) -> summed-color table so it's two
@@ -202,19 +255,45 @@ class View:
         m = land.shape[0] // 2
         lut16 = self.land_lut.astype(np.uint16)
         k = len(lut16)
-        pair = (lut16[:, None, :] + lut16[None, :, :]).reshape(k * k, 3)
+        pair = (lut16[:, None, :] + lut16[None, :, :]).reshape(k * k, 4)
         a = land[0:2 * m:2, 0:2 * m:2].astype(np.uint16) * k + land[0:2 * m:2, 1:2 * m:2]
         b = land[1:2 * m:2, 0:2 * m:2].astype(np.uint16) * k + land[1:2 * m:2, 1:2 * m:2]
         sums = pair[a]
         sums += pair[b]
         mip = (sums >> 2).astype(np.uint8)
         del a, b, sums
-        self.land_mips = [None, (mip.reshape(-1, 3), m)]
+        self.land_mips = [None, (mip.reshape(-1, 4), m)]
         for _ in range(2, LAND_MIP_LEVELS):
             m //= 2
             src = mip[:2 * m, :2 * m].astype(np.uint16)
             mip = ((src[0::2, 0::2] + src[1::2, 0::2] + src[0::2, 1::2] + src[1::2, 1::2]) >> 2).astype(np.uint8)
-            self.land_mips.append((mip.reshape(-1, 3), m))
+            self.land_mips.append((mip.reshape(-1, 4), m))
+
+    # -- time of day ------------------------------------------------------
+
+    def set_lighting(self, lighting, world=None):
+        """A daylight.Lighting for everything drawn from now on; with the
+        Scenery, buildings are also re-shaded for the sun's direction."""
+        self.lighting = lighting
+        az = math.radians(lighting.sun_az)
+        self.sun_dir = (math.sin(az), math.cos(az))
+        LIGHT[:] = lighting.light
+        LIGHTS_ON[:] = lighting.lights_on
+        sin_top = math.sin(math.radians(SKY_TOP_DEG))
+        day_sky = getattr(self, "day_sky", None)
+        if day_sky is None:
+            day_sky = np.array(_sky_palette(256), np.float32)
+        lut = lighting.sky_lut(day_sky, SKY_AZ_STEPS, 256, sin_top)
+        # Haze: the horizon's color, averaged around (plain day: as before).
+        HAZE[:] = self.day_haze if lighting.day >= 1.0 else lut[:, 0].mean(0)
+        if self.land is not None:
+            self._land_palette()
+            if self.ground_smooth:
+                self.sky_lut = lut
+        else:
+            self._flat_palette()
+        if world is not None and world.buildings is not None:
+            world.buildings.relight(self.sun_dir)
 
     # -- camera ------------------------------------------------------------
 
@@ -270,7 +349,7 @@ class View:
         self.surface.blit(self.backdrop, (0, 0))
 
     def _land_texels(self, level, row, col):
-        """Colors (k, 3) float of texels at integer (row, col) on a mip level."""
+        """Colors + night light (k, 4) float of texels at integer (row, col) on a mip level."""
         if level == 0:
             return self.land_lut[self.land.land[row, col]]
         mip, m = self.land_mips[level]
@@ -282,7 +361,13 @@ class View:
         world = (rays @ self.rot).reshape(-1, 3)
         sin_e = world[:, 1]
         sky_i = np.clip((sin_e * self.sky_scale_rgb).astype(np.int32), 0, 255)
-        out = self.sky_lut[sky_i]
+        if self.lighting.day >= 1.0:
+            out = self.sky_lut[0][sky_i]
+        else:  # which way each ray looks, relative to the sun (for the sunset glow)
+            sx, sz = self.sun_dir
+            toward = world[:, 0] * sx + world[:, 2] * sz
+            az_i = np.clip(((toward + 1) * ((SKY_AZ_STEPS - 1) / 2) + 0.5).astype(np.int32), 0, SKY_AZ_STEPS - 1)
+            out = self.sky_lut[az_i, sky_i]
         g = np.nonzero(sin_e < -1e-4)[0]
         if len(g):
             w = world[g]
@@ -297,7 +382,7 @@ class View:
             # the ground (geometric mean of the along- and across-view stretch).
             texels = t * self.land_pix_angle * inv / np.sqrt(down)
             level = np.clip(np.log2(np.maximum(texels, 1.0)), 0, LAND_MIP_LEVELS - 1).astype(np.int32)
-            col = np.empty((len(g), 3), np.float32)
+            col = np.empty((len(g), 4), np.float32)
             for lv in range(LAND_MIP_LEVELS):
                 sel = np.nonzero(level == lv)[0]
                 if not len(sel):
@@ -314,8 +399,11 @@ class View:
                 top = self._land_texels(lv, r0, c0) * (1 - fu) + self._land_texels(lv, r0, c0 + 1) * fu
                 bot = self._land_texels(lv, r0 + 1, c0) * (1 - fu) + self._land_texels(lv, r0 + 1, c0 + 1) * fu
                 col[sel] = top * (1 - fv) + bot * fv
+            rgb = col[:, :3]
+            if self.lighting.day < 1.0:
+                rgb = rgb * LIGHT + _glow(col[:, 3:]) * LIGHTS_ON
             f = haze_amount(t)[:, None]
-            out[g] = col * (1 - f) + HAZE * f
+            out[g] = np.minimum(rgb * (1 - f) + HAZE * f, 255)
         pygame.surfarray.blit_array(self.land_rgb_surface,
                                     out.reshape(lh, lw, 3).transpose(1, 0, 2).astype(np.uint8))
         if (lw, lh) == (self.w, self.h):
@@ -436,7 +524,7 @@ class View:
         widths = STYLE_WIDTH.tolist()
         mid = np.sqrt(np.maximum(slant[visible] ** 2 - self.cam_height ** 2, 0))
         colors = feature_colors(STYLE_BASE[style[visible]], slant[visible], mid, max_dist[visible],
-                                self.ground_color)
+                                self.ground_color, STYLE_EMIT[style[visible]])
         for k, a, b, st, c, near_ok in zip(visible.tolist(), bounds[visible].tolist(),
                                            bounds[visible + 1].tolist(), style[visible].tolist(),
                                            colors, (zmin[visible] >= NEAR).tolist()):
@@ -489,7 +577,8 @@ class View:
         # Thinner than a pixel on screen (far, edge-on): not worth a polygon.
         on &= (zmin < NEAR) | (sx.max(1) - sx.min(1) > 0.8)
         f = haze[pc][:, None]
-        colors = b.color[pc] * b.shade[walls][:, None] * (1 - f) + HAZE * f
+        colors = (b.color[pc] * b.shade[walls][:, None] * LIGHT
+                  + np.array(sc.WINDOW_GLOW, np.float32) * (b.windows[pc] * LIGHTS_ON)[:, None]) * (1 - f) + HAZE * f
         wall_d = np.hypot(to_cam[walls, 0], to_cam[walls, 1])
 
         # Roofs of kept pieces seen from above, drawn after their own walls:
@@ -514,7 +603,7 @@ class View:
             r_near = np.zeros(0, bool)
             keep_r = np.zeros(0, np.int64)
         f = haze[roofs][:, None]
-        roof_colors = np.minimum(b.color[roofs] * 1.06, 255) * (1 - f) + HAZE * f
+        roof_colors = np.minimum(b.color[roofs] * 1.06, 255) * LIGHT * (1 - f) + HAZE * f
 
         # One draw order: piece far -> near, then within a piece walls far ->
         # near, roof last.
@@ -646,7 +735,7 @@ class View:
         facing = nx * to_x + nz * to_z + slope * self.pos[1] > 0  # (k, 4); corners sit at y = 0
         lit = np.clip(nx * sc.SUN_DIR[0] + nz * sc.SUN_DIR[1], 0, 1)
         f = haze_amount(np.hypot(dist[idx], self.cam_height))[:, None, None]
-        colors = self.tree_color[cls[idx]][:, None, :] * (0.62 + 0.5 * lit)[..., None] * (1 - f) + HAZE * f
+        colors = self.tree_color[cls[idx]][:, None, :] * (0.62 + 0.5 * lit)[..., None] * LIGHT * (1 - f) + HAZE * f
         # Only the faces that show, already far to near (a tree's own
         # visible faces never overlap, so their order doesn't matter).
         tri = np.empty((k, 4, 3, 2), np.float32)
@@ -659,8 +748,23 @@ class View:
             draw(surf, c, p)
         return int(facing.sum())
 
+    def draw_stars(self):
+        k = self.lighting.stars
+        if k <= 0:
+            return
+        cam = self.star_dirs @ self.rot.T
+        on = cam[:, 2] > 0.05
+        x = (self.w / 2 + self.focal * cam[on, 0] / cam[on, 2]).astype(np.int32)
+        y = (self.h / 2 - self.focal * cam[on, 1] / cam[on, 2]).astype(np.int32)
+        b = (self.star_bright[on] * k).astype(np.int32)
+        inside = (x >= 0) & (x < self.w) & (y >= 0) & (y < self.h)
+        surf = self.surface
+        for px, py, v in zip(x[inside].tolist(), y[inside].tolist(), b[inside].tolist()):
+            surf.set_at((px, py), (v, v, min(v + 12, 255)))
+
     def render(self, world):
         self.draw_sky_and_ground()
+        self.draw_stars()
         self.draw_lakes(world)
         n = self.draw_lines(world.lines)
         self.draw_buildings(world)

@@ -46,6 +46,9 @@ DEFAULTS = {
         # "smooth": blended texels + mipmaps, no shimmer in motion.
         # "nearest": chunky one-texel samples (cheaper, "digital camo").
         "ground_filter": "smooth",
+        # Time of day for the lighting: "auto" (the real clock and sun), or
+        # a fixed local time like "19:05" (testing; or a favorite hour).
+        "clock": "auto",
         # Color saturation of the whole scene, x the drone-matched colors
         # (1 = as photographed, which reads a little muted on the CRTs).
         "saturation": "1.7",
@@ -76,6 +79,7 @@ def load():
         "ground_filter": cp.get("view", "ground_filter"),
         "trees": cp.getboolean("view", "trees"),
         "saturation": cp.getfloat("view", "saturation"),
+        "clock": cp.get("view", "clock"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),
     }

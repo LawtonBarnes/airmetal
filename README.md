@@ -21,6 +21,13 @@ The wall is one 1024x768 frame from a Raspberry Pi 3B+, split into four
   plus distance-from-the-shop and signal-strength gauges, and a data box
   with the callsign, transponder code and aircraft category.
 
+**Time of day** follows the real sun over the Metal Shop: daylight
+(colors matched to drone photos from the shop's roof), golden hour, a
+sunset glow on the sun's side of the sky, dusk, then night -- a black sky
+with stars, the city's land cover glowing amber the way NASA's astronaut
+photos show Dallas, orange street lights on every road, white runway and
+blue taxiway lights, lit windows downtown. `[view] clock` pins a time.
+
 ## Where the traffic comes from
 
 P4's readsb (the SDR that JOAN JET shows), polled over HTTP once a second:

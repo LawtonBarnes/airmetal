@@ -20,6 +20,7 @@ import sys
 import time
 
 import config
+import daylight
 
 
 def parse_args():
@@ -33,6 +34,7 @@ def parse_args():
     ap.add_argument("--headless", action="store_true", help="window mode with no display (testing; use --snap)")
     ap.add_argument("--snap", help="save a frame to this directory every --snap-every seconds")
     ap.add_argument("--snap-every", type=float, default=10.0)
+    ap.add_argument("--clock", help="light the scene as at this local time, HH:MM (overrides settings.ini)")
     return ap.parse_args()
 
 
@@ -59,6 +61,7 @@ from geo import M_PER_NM  # noqa: E402
 # Metal Shop, panning slowly from White Rock Lake toward downtown.
 STANDBY_CAM = {"alt_m": 122.0, "pitch": -6.0, "heading0": 252.0, "pan_deg": 25.0, "pan_sec": 60.0}
 HANDOFF_SEC = 6.0
+LIGHTING_SEC = 10.0  # how often the sun is recomputed
 EXIT_GOTO_HOME = 42  # see STRINGS/SCRUTE: Home hands off to the app menu
 
 
@@ -89,6 +92,9 @@ class App:
                                   self.world, self.s["ground_scale"], self.s["ground_filter"],
                                   self.s["trees"])
         self.view_big = pygame.Surface((config.FRAME_W, config.VIEW_H))
+        self.clock = ARGS.clock or self.s["clock"]
+        self.next_lighting = 0.0
+        self.update_lighting()
         self.panel = panelmod.Panel()
         if ARGS.replay:
             self.feed = feedmod.ReplayFeed(ARGS.replay, ARGS.speed, ARGS.offset)
@@ -186,6 +192,20 @@ class App:
 
     # -- frame ---------------------------------------------------------------
 
+    def update_lighting(self):
+        """The sun for the real time (or the fixed clock setting), into the view."""
+        now = time.time()
+        if now < self.next_lighting:
+            return
+        self.next_lighting = now + LIGHTING_SEC
+        t = now
+        if self.clock != "auto":
+            hh, mm = (int(v) for v in self.clock.split(":"))
+            lt = time.localtime(now)
+            t = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hh, mm, 0, 0, 0, -1))
+        elev, az = daylight.sun_position(t, self.s["lat"], self.s["lon"])
+        self.view.set_lighting(daylight.lighting_at(elev, az), self.world)
+
     def update(self, dt):
         now = self.feed.clock()
         reports = self.feed.poll()
@@ -262,6 +282,7 @@ class App:
             # Traffic, the director and the camera keep going under ABOUT,
             # so it comes back to the same ride; only the 3D render stops.
             track = self.update(dt)
+            self.update_lighting()
             c = self.cam
             if self.about is not None:
                 top = self.about.copy() if self.power_dialog is not None else self.about

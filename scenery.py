@@ -72,6 +72,18 @@ LAND_CLASSES = {
     "crops": (101, 93, 74),
     "wetland": (62, 75, 62),
 }
+# Night: each land class's own light at full dark (0..255; see render3d's
+# NIGHT_GLOW) -- per NASA's astronaut photo of Dallas at night: commercial
+# and dense areas blaze yellow-white, medium ones orange-gold, tree-shaded
+# neighborhoods stay mostly dark between the lit arterials.
+LAND_EMIT = {"developed_high": 190, "developed_medium": 105, "developed_low": 24, "developed_open": 6}
+# ...and lines' (rgb at full dark): street lights, runway and taxiway edge lights.
+LINE_EMIT = {
+    "motorway": (255, 172, 64), "trunk": (250, 164, 58), "primary": (240, 150, 48),
+    "secondary": (220, 134, 40), "tertiary": (185, 110, 32),
+    "runway": (220, 220, 200), "taxiway": (50, 80, 230),
+}
+WINDOW_GLOW = (150, 126, 76)  # lit windows: a tower wall's added light at full dark
 
 # Trees: low-altitude rides get pyramid trees on the wooded land classes,
 # one chance per land texel (a deterministic hash picks which, and where in
@@ -166,8 +178,9 @@ class Buildings:
         normal = np.stack([edge[:, 1], -edge[:, 0]], -1)
         normal /= np.maximum(np.hypot(normal[:, 0], normal[:, 1]), 1e-6)[:, None]
         self.normal = normal.astype(np.float32)
-        lit = np.clip(normal @ np.array(SUN_DIR, np.float32), 0, 1)
-        self.shade = (WALL_SHADE[0] + (WALL_SHADE[1] - WALL_SHADE[0]) * lit).astype(np.float32)
+        self.relight(SUN_DIR)
+        # How lit each piece's windows are at night (some offices empty).
+        self.windows = (0.45 + 0.55 * ((np.arange(n) * 2654435761) % 1000) / 1000).astype(np.float32)
         self.mid = ((self.bottom + self.bottom[nxt]) / 2).astype(np.float32)
         # Every wall as a world-space quad: bottom i, bottom i+1, top i+1, top i.
         self.piece = np.repeat(np.arange(n), np.diff(self.start))
@@ -178,6 +191,12 @@ class Buildings:
             pts = ring if idx is None else ring[idx]
             q[:, j, 0], q[:, j, 1], q[:, j, 2] = pts[:, 0], y, pts[:, 1]
         self.wall_quads = q
+
+
+    def relight(self, sun_dir):
+        """Wall shading for sunlight from `sun_dir` (horizontal, toward the sun)."""
+        lit = np.clip(self.normal @ np.asarray(sun_dir, np.float32), 0, 1)
+        self.shade = (WALL_SHADE[0] + (WALL_SHADE[1] - WALL_SHADE[0]) * lit).astype(np.float32)
 
 
 class Scenery:
