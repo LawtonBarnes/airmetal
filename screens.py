@@ -27,14 +27,13 @@ TUBE_W, TUBE_H = config.FRAME_W // 2, config.FRAME_H // 2
 TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT = (0, 0), (1, 0), (0, 1), (1, 1)
 TUBE_SCALE = 384 / 480
 
-# Splash: the other apps' 500x281 image on a 720x480 frame is the same
-# share of the screen as 711x450 of the wall's 1024x768. Until the real
-# splash.png exists, a placeholder box that size stands in for it.
-SPLASH_SIZE = (711, 450)
+# Splash: unlike the rest of the fleet, AIR METAL's art fills the whole
+# wall (splash.png is 1024x768). VERSION sits centered in the lower-left
+# tube, orange Fjalla One with a thin black outline so it reads over the art.
+# Until splash.png exists, a placeholder box stands in for it.
 SPLASH_SECONDS = 5.0
-SPLASH_Y_OFFSET = 64  # the fleet's 40px shift up, scaled to the wall
-SPLASH_VERSION_FONT_SIZE = 36
-SPLASH_VERSION_GAP = 32
+SPLASH_VERSION_FONT_SIZE = 40
+SPLASH_VERSION_OUTLINE = 2
 
 ABOUT_MARGIN_Y = 38  # the fleet's 48px, per tube
 ABOUT_LINE_GAP = 6
@@ -51,27 +50,37 @@ def tube_rect(tube):
     return pygame.Rect(col * TUBE_W, row * TUBE_H, TUBE_W, TUBE_H)
 
 
+def outlined_text(font, text, color, outline):
+    """text in color over a black copy stamped around it, outline px thick."""
+    fill = font.render(text, True, color)
+    edge = font.render(text, True, BLACK)
+    surf = pygame.Surface((fill.get_width() + 2 * outline, fill.get_height() + 2 * outline), pygame.SRCALPHA)
+    for dx in range(-outline, outline + 1):
+        for dy in range(-outline, outline + 1):
+            if dx * dx + dy * dy <= outline * outline:
+                surf.blit(edge, (outline + dx, outline + dy))
+    surf.blit(fill, (outline, outline))
+    return surf
+
+
 def build_splash(path, version):
-    """Splash at the image's native size, raised a little from dead center,
-    VERSION underneath in orange -- the fleet pattern (see loudness.py).
+    """Full-frame splash art, VERSION centered in the lower-left tube.
     No convert(): in framebuffer mode there's no SDL display to convert to."""
-    try:
-        img = pygame.image.load(str(path))
-    except (pygame.error, OSError, FileNotFoundError):
-        img = pygame.Surface(SPLASH_SIZE)
-        img.fill(BLACK)
-        pygame.draw.rect(img, GRAY, img.get_rect(), 3)
-        font = pygame.font.Font(config.FONT_PATH, 60)
-        label = font.render("AIR METAL", True, WHITE)
-        img.blit(label, label.get_rect(center=img.get_rect().center))
     canvas = pygame.Surface((config.FRAME_W, config.FRAME_H))
     canvas.fill(BLACK)
-    img_w, img_h = img.get_size()
-    img_y = (config.FRAME_H - img_h) // 2 - SPLASH_Y_OFFSET
-    canvas.blit(img, ((config.FRAME_W - img_w) // 2, img_y))
-    font = pygame.font.Font(config.FONT_PATH, SPLASH_VERSION_FONT_SIZE)
-    surf = font.render(f"VERSION {version}", True, ORANGE)
-    canvas.blit(surf, ((config.FRAME_W - surf.get_width()) // 2, img_y + img_h + SPLASH_VERSION_GAP))
+    try:
+        img = pygame.image.load(str(path))
+        if img.get_size() != canvas.get_size():
+            img = pygame.transform.smoothscale(img, canvas.get_size())
+        canvas.blit(img, (0, 0))
+    except (pygame.error, OSError, FileNotFoundError):
+        pygame.draw.rect(canvas, GRAY, canvas.get_rect(), 3)
+        font = pygame.font.Font(config.FONT_PATH, 60)
+        label = font.render("AIR METAL", True, WHITE)
+        canvas.blit(label, label.get_rect(center=canvas.get_rect().center))
+    font = pygame.font.Font(config.SPLASH_FONT_PATH, SPLASH_VERSION_FONT_SIZE)
+    surf = outlined_text(font, f"VERSION {version}", ORANGE, SPLASH_VERSION_OUTLINE)
+    canvas.blit(surf, surf.get_rect(center=tube_rect(BOTTOM_LEFT).center))
     return canvas
 
 

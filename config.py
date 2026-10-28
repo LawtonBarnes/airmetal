@@ -11,6 +11,7 @@ VERSION = "0.1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings.ini")
 FONT_PATH = os.path.join(BASE_DIR, "VCR_OSD_MONO_1.001.ttf")
+SPLASH_FONT_PATH = os.path.join(BASE_DIR, "FjallaOne-Regular.ttf")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 SPLASH_PATH = os.path.join(BASE_DIR, "splash.png")  # optional -- see screens.build_splash
 LOGO_PATH = os.path.join(BASE_DIR, "metalshop-logo.png")  # ABOUT screen
