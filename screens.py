@@ -28,12 +28,14 @@ TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT = (0, 0), (1, 0), (0, 1), (1, 1)
 TUBE_SCALE = 384 / 480
 
 # Splash: unlike the rest of the fleet, AIR METAL's art fills the whole
-# wall (splash.png is 1024x768). VERSION sits centered in the lower-left
-# tube, orange Fjalla One with a thin black outline so it reads over the art.
+# wall (splash.png is 1024x768). VERSION sits centered under the logo in
+# the top-right tube, in the art's cream (f3e0cd) Fjalla One, no outline --
+# placed from the user's SPLASH-AIR-METAL-SCREEN-LAYOUT.png (2026-10-29).
 # Until splash.png exists, a placeholder box stands in for it.
 SPLASH_SECONDS = 5.0
-SPLASH_VERSION_FONT_SIZE = 40
-SPLASH_VERSION_OUTLINE = 2
+SPLASH_VERSION_FONT_SIZE = 26
+SPLASH_VERSION_COLOR = (0xF3, 0xE0, 0xCD)
+SPLASH_VERSION_CENTER = (768, 310)  # where the letters' ink is centered
 
 ABOUT_MARGIN_Y = 38  # the fleet's 48px, per tube
 ABOUT_LINE_GAP = 6
@@ -64,7 +66,7 @@ def outlined_text(font, text, color, outline):
 
 
 def build_splash(path, version):
-    """Full-frame splash art, VERSION centered in the lower-left tube.
+    """Full-frame splash art, VERSION centered under the logo.
     No convert(): in framebuffer mode there's no SDL display to convert to."""
     canvas = pygame.Surface((config.FRAME_W, config.FRAME_H))
     canvas.fill(BLACK)
@@ -79,8 +81,9 @@ def build_splash(path, version):
         label = font.render("AIR METAL", True, WHITE)
         canvas.blit(label, label.get_rect(center=canvas.get_rect().center))
     font = pygame.font.Font(config.SPLASH_FONT_PATH, SPLASH_VERSION_FONT_SIZE)
-    surf = outlined_text(font, f"VERSION {version}", ORANGE, SPLASH_VERSION_OUTLINE)
-    canvas.blit(surf, surf.get_rect(center=tube_rect(BOTTOM_LEFT).center))
+    surf = font.render(f"VERSION {version}", True, SPLASH_VERSION_COLOR)
+    ink = surf.get_bounding_rect()
+    canvas.blit(surf, (SPLASH_VERSION_CENTER[0] - ink.centerx, SPLASH_VERSION_CENTER[1] - ink.centery))
     return canvas
 
 
