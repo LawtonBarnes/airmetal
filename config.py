@@ -57,6 +57,10 @@ DEFAULTS = {
         # altimeter. Off: tried 2026-10-27, too pointy and sparse to read as
         # trees, and denser costs too much on a Pi 3B+.
         "trees": "off",
+        # The windshield's last step: one fixed 256-color palette through a
+        # 4x4 ordered dither, so ground, roads and sky look like one engine
+        # (on/off; ~17ms a frame on a Pi 3B+). Picked on the wall 2026-10-29.
+        "dither": "on",
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
@@ -79,6 +83,7 @@ def load():
         "ground_scale": cp.getint("view", "ground_scale"),
         "ground_filter": cp.get("view", "ground_filter"),
         "trees": cp.getboolean("view", "trees"),
+        "dither": cp.getboolean("view", "dither"),
         "saturation": cp.getfloat("view", "saturation"),
         "clock": cp.get("view", "clock"),
         "delay_sec": cp.getfloat("view", "delay_sec"),

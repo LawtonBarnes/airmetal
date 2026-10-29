@@ -154,13 +154,20 @@ def _sky_palette(steps):
     return [_rgb([np.interp(e, anchors, colors[:, k]) for k in range(3)]) for e in elev]
 
 
+def sky_colors(elevations):
+    """The day sky's colors (after set_saturation) at these degrees above the horizon."""
+    anchors = np.array([e for e, _ in SKY_BANDS])
+    colors = np.array([c for _, c in SKY_BANDS], np.float32)
+    return np.array([[np.interp(e, anchors, colors[:, k]) for k in range(3)] for e in elevations], np.float32)
+
+
 class View:
     def __init__(self, width, height, fov_deg, land=None, ground_scale=2, ground_filter="smooth", trees=True):
         """`land`: a Scenery with a land-cover raster, for the textured ground
         (None, or a Scenery without one: flat ground)."""
         self.w, self.h = width, height
         self.focal = width / 2 / math.tan(math.radians(fov_deg) / 2)
-        self.surface = pygame.Surface((width, height))
+        self.surface = pygame.Surface((width, height), 0, 32)
         # Every pixel's unit view ray in camera space (x right, y up, z forward).
         self.rays = self._rays(width, height, 1)
         self.backdrop = pygame.Surface((width, height), depth=8)
