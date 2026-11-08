@@ -1,5 +1,7 @@
 # AIR METAL
 
+> **Fleet-specific (beta):** needs a live readsb `aircraft.json` from another Pi on your network and ships Dallas-area scenery. Not a drop-in single-Pi app yet.
+
 A retro flight sim for a 2x2 wall of CRTs that rides real aircraft, live,
 as they fly over Dallas. Part of the METAL SHOP McBrain fleet (launched by
 STRINGS, assigned from SCRUTE), and a companion to JOAN JET: it reads the
