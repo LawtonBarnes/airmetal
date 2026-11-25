@@ -77,6 +77,12 @@ DEFAULTS = {
         # smear, like composite video). For the 21" wall to sit closer to
         # EXITROW's 14" tubes: soft on the wall 2026-11-25, then "more".
         "blur": "more",
+        # Windshield pixel size in wall pixels: 2 renders 512x192 (as
+        # always), 4 renders 256x96 -- chunkier, so the OREI's ~1.4x
+        # rescale of each quadrant to NTSC moves fine detail around less
+        # (the EXITROW tubes, fed 720x480 directly, barely jitter). The
+        # ground keeps the same number of samples either way.
+        "pixel_size": "2",
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
@@ -133,6 +139,7 @@ def load():
         "saturation": cp.getfloat("view", "saturation"),
         "line_range": cp.getfloat("view", "line_range"),
         "blur": cp.get("view", "blur").strip().lower(),
+        "pixel_size": cp.getint("view", "pixel_size"),
         "clock": cp.get("view", "clock"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),

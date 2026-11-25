@@ -91,8 +91,13 @@ class App:
         self.fps = 0.0
         self.world = scenery.Scenery(config.DATA_DIR, self.s["lat"], self.s["lon"])
         render3d.set_saturation(self.s["saturation"], self.world)
-        self.view = render3d.View(config.VIEW_LOW_W, config.VIEW_LOW_H, self.s["fov_deg"],
-                                  self.world, self.s["ground_scale"], self.s["ground_filter"],
+        # [view] pixel_size: 2 = 512x192 (config.VIEW_LOW_*), 4 = 256x96. The
+        # ground's sample grid is kept the same size either way.
+        self.pixel_size = self.s["pixel_size"] if self.s["pixel_size"] in (2, 4) else 2
+        ground_scale = max(1, self.s["ground_scale"] * 2 // self.pixel_size)
+        self.view = render3d.View(config.FRAME_W // self.pixel_size, config.VIEW_H // self.pixel_size,
+                                  self.s["fov_deg"],
+                                  self.world, ground_scale, self.s["ground_filter"],
                                   self.s["trees"])
         self.view.line_range = self.s["line_range"]
         if self.s["windsock_height_m"] > 0:
@@ -184,6 +189,7 @@ class App:
             ("FOV", f"{self.s['fov_deg']:g} DEG"),
             ("DITHER", "ON" if self.dither is not None else "OFF"),
             ("BLUR", self.blur.upper()),
+            ("PIXELS", f"{config.FRAME_W // self.pixel_size}x{config.VIEW_H // self.pixel_size}"),
             ("FRAME RATE", f"{self.fps:.1f} FPS" if self.fps else "--"),
         ]
 
