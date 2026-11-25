@@ -136,7 +136,7 @@ def load():
         "feed_url": cp.get("feed", "url"),
         "poll_sec": cp.getfloat("feed", "poll_sec"),
         "fov_deg": cp.getfloat("view", "fov_deg"),
-        "ground_scale": cp.getint("view", "ground_scale"),
+        "ground_scale": cp.getfloat("view", "ground_scale"),
         "ground_filter": cp.get("view", "ground_filter"),
         "trees": cp.getboolean("view", "trees"),
         "dither": cp.getboolean("view", "dither"),

@@ -94,7 +94,9 @@ class App:
         # [view] pixel_size: 2 = 512x192 (config.VIEW_LOW_*), 4 = 256x96. The
         # ground's sample grid is kept the same size either way.
         self.pixel_size = self.s["pixel_size"] if self.s["pixel_size"] in (1, 2, 4) else 2
-        ground_scale = max(1, self.s["ground_scale"] * 2 // self.pixel_size)
+        # ground_scale counts in 512x192 pixels (so 1.5 at pixel_size 1 = a
+        # 341x128 grid, each sample 3x3 wall pixels -- like EXITROW's).
+        ground_scale = max(1, round(self.s["ground_scale"] * 2 / self.pixel_size))
         self.view = render3d.View(config.FRAME_W // self.pixel_size, config.VIEW_H // self.pixel_size,
                                   self.s["fov_deg"],
                                   self.world, ground_scale, self.s["ground_filter"],

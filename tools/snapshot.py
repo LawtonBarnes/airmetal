@@ -25,7 +25,7 @@ t0 = time.perf_counter()
 world = scenery.Scenery(config.DATA_DIR, s["lat"], s["lon"])
 render3d.set_saturation(s["saturation"], world)
 t1 = time.perf_counter()
-view = render3d.View(config.VIEW_LOW_W, config.VIEW_LOW_H, s["fov_deg"], world, s["ground_scale"],
+view = render3d.View(config.VIEW_LOW_W, config.VIEW_LOW_H, s["fov_deg"], world, max(1, round(s["ground_scale"])),
                      s["ground_filter"])
 view.set_camera(east, alt_ft * 0.3048, north, heading, pitch, bank)
 drawn = view.render(world)
