@@ -74,9 +74,9 @@ DEFAULTS = {
         "line_range": "0.5",
         # Softening while the windshield is scaled up to the wall (blur.py):
         # off, soft (a smooth 2x upscale -- free) or more (plus a sideways
-        # smear, like composite video). Picked 2026-11-25 so the 21" wall
-        # sits closer to EXITROW's 14" tubes.
-        "blur": "soft",
+        # smear, like composite video). For the 21" wall to sit closer to
+        # EXITROW's 14" tubes: soft on the wall 2026-11-25, then "more".
+        "blur": "more",
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
@@ -84,8 +84,9 @@ DEFAULTS = {
     "windsock": {
         # The shop's windsock (windsock.py), so it can be picked out from
         # the air. Height in meters -- a 4-story building is ~14, about 7 px
-        # tall from a mile out; 40 reads as a windsock from a few km.
-        "height_m": "40",
+        # tall from a mile out. 40 was still "pretty tiny even at low
+        # altitudes" from a passing chopper (user, 2026-11-25): 4x that.
+        "height_m": "160",
         # Compass direction the wind blows FROM (the sock points the other
         # way). height_m = 0: no windsock.
         "wind_from": "180",
