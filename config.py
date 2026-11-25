@@ -72,6 +72,11 @@ DEFAULTS = {
         # (scenery.LINE_STYLES). Full range sometimes drew roads past the
         # horizon haze (user, 2026-11-25); EXITROW's half range looked right.
         "line_range": "0.5",
+        # Softening while the windshield is scaled up to the wall (blur.py):
+        # off, soft (a smooth 2x upscale -- free) or more (plus a sideways
+        # smear, like composite video). Picked 2026-11-25 so the 21" wall
+        # sits closer to EXITROW's 14" tubes.
+        "blur": "soft",
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
@@ -126,6 +131,7 @@ def load():
         "dither": cp.getboolean("view", "dither"),
         "saturation": cp.getfloat("view", "saturation"),
         "line_range": cp.getfloat("view", "line_range"),
+        "blur": cp.get("view", "blur").strip().lower(),
         "clock": cp.get("view", "clock"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),

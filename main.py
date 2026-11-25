@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 
+import blur as blurmod
 import config
 import daylight
 import dither as dithermod
@@ -99,6 +100,7 @@ class App:
         self.dither = (dithermod.Dither(self.view.surface, render3d.sky_colors(dithermod.SKY_ELEVATIONS))
                        if self.s["dither"] else None)
         self.view_big = pygame.Surface((config.FRAME_W, config.VIEW_H))
+        self.blur = self.s["blur"] if self.s["blur"] in blurmod.MODES else "off"
         self.clock = ARGS.clock or self.s["clock"]
         self.next_lighting = 0.0
         self.update_lighting()
@@ -181,6 +183,7 @@ class App:
             ("DELAY", f"{self.s['delay_sec']:g} SEC"),
             ("FOV", f"{self.s['fov_deg']:g} DEG"),
             ("DITHER", "ON" if self.dither is not None else "OFF"),
+            ("BLUR", self.blur.upper()),
             ("FRAME RATE", f"{self.fps:.1f} FPS" if self.fps else "--"),
         ]
 
@@ -299,7 +302,7 @@ class App:
                 self.view.render(self.world)
                 if self.dither is not None:
                     self.dither.apply()
-                pygame.transform.scale(self.view.surface, (config.FRAME_W, config.VIEW_H), self.view_big)
+                blurmod.upscale(self.view.surface, self.view_big, self.blur)
                 if track is not None and time.time() < self.handoff_until:
                     self.draw_card(self.view_big, track)
                 elif track is None:
