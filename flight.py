@@ -24,7 +24,8 @@ FORGET_SEC = 90.0  # ...and this long: dropped entirely
 HISTORY_SEC = 60.0
 G = 9.81
 MAX_BANK_DEG = 30.0
-CAMERA_BLEND = 0.25  # per-frame smoothing of heading/pitch (at 10fps)
+CAMERA_BLEND = 0.25  # smoothing of heading/pitch: this share per 0.1 s (one frame at 10 fps),
+# applied per frame as 1 - (1 - CAMERA_BLEND) ** (dt / 0.1) so it feels the same at any frame rate
 # The windshield doesn't pitch with the aircraft one for one: a climbing
 # jet would sink the ground to the bottom of the screen. It follows this
 # share of the pitch, and looks down a fixed few degrees, over the nose.
@@ -189,7 +190,7 @@ class Camera:
         pitch = math.degrees(math.atan2(vy, max(speed, 20.0)))
         fresh = self._fresh
         self._fresh = False
-        k = 1.0 if fresh else CAMERA_BLEND
+        k = 1.0 if fresh else 1 - (1 - CAMERA_BLEND) ** (max(dt, 0.0) / 0.1)
         k_turn = 1.0 if fresh else 1 - math.exp(-dt / TURN_TAU_SEC)
         k_bank = 1.0 if fresh else 1 - math.exp(-dt / BANK_TAU_SEC)
         self.turn_rate += (turn - self.turn_rate) * k_turn

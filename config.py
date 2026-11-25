@@ -20,7 +20,7 @@ LOGO_PATH = os.path.join(BASE_DIR, "metalshop-logo.png")  # ABOUT screen
 FRAME_W, FRAME_H = 1024, 768
 VIEW_H = 384  # the top two tubes: the windshield
 VIEW_LOW_W, VIEW_LOW_H = 512, 192  # 3D render size, pixel-doubled to 1024x384
-TARGET_FPS = 10
+TARGET_FPS = 10  # EXITROW (Pi 3B+); AIR METAL's own is [view] fps
 
 # EXITROW (exitrow.py): one puppet tube, 720x480 shown 4:3 (pixels 8/9 as
 # wide as tall). The 3D view renders at half size and is pixel-doubled.
@@ -84,6 +84,9 @@ DEFAULTS = {
         # sized and shimmers as it moves; smaller ones hide that. The ground
         # keeps the same number of samples at every size.
         "pixel_size": "2",
+        # Frames a second the wall aims for. 10 on the Pi 3B+; QUAD's Pi 5
+        # runs 20 at pixel_size 1 (2026-11-25) -- smoother motion, less jitter.
+        "fps": "10",
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
@@ -141,6 +144,7 @@ def load():
         "line_range": cp.getfloat("view", "line_range"),
         "blur": cp.get("view", "blur").strip().lower(),
         "pixel_size": cp.getint("view", "pixel_size"),
+        "fps": cp.getfloat("view", "fps"),
         "clock": cp.get("view", "clock"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),

@@ -189,6 +189,7 @@ class App:
             ("FOV", f"{self.s['fov_deg']:g} DEG"),
             ("DITHER", "ON" if self.dither is not None else "OFF"),
             ("BLUR", self.blur.upper()),
+            ("TARGET", f"{self.s['fps']:g} FPS"),
             ("PIXELS", f"{config.FRAME_W // self.pixel_size}x{config.VIEW_H // self.pixel_size}"),
             ("FRAME RATE", f"{self.fps:.1f} FPS" if self.fps else "--"),
         ]
@@ -345,7 +346,7 @@ class App:
                 next_snap = now_wall + ARGS.snap_every
             if t_end and now_wall > t_end:
                 break
-            clock.tick(config.TARGET_FPS)
+            clock.tick(self.s["fps"])
         self.link.close()
         self.out.close()
         pygame.quit()
