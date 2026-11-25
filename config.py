@@ -77,11 +77,12 @@ DEFAULTS = {
         # smear, like composite video). For the 21" wall to sit closer to
         # EXITROW's 14" tubes: soft on the wall 2026-11-25, then "more".
         "blur": "more",
-        # Windshield pixel size in wall pixels: 2 renders 512x192 (as
-        # always), 4 renders 256x96 -- chunkier, so the OREI's ~1.4x
-        # rescale of each quadrant to NTSC moves fine detail around less
-        # (the EXITROW tubes, fed 720x480 directly, barely jitter). The
-        # ground keeps the same number of samples either way.
+        # Windshield pixel size in wall pixels: 1 renders the full 1024x384
+        # (needs QUAD's Pi 5), 2 renders 512x192 and pixel-doubles (the
+        # Pi 3B+ days), 4 renders 256x96. The OREI stretches each 512x384
+        # quadrant ~1.4x to NTSC, so a rendered pixel comes out unevenly
+        # sized and shimmers as it moves; smaller ones hide that. The ground
+        # keeps the same number of samples at every size.
         "pixel_size": "2",
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.

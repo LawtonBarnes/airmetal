@@ -93,7 +93,7 @@ class App:
         render3d.set_saturation(self.s["saturation"], self.world)
         # [view] pixel_size: 2 = 512x192 (config.VIEW_LOW_*), 4 = 256x96. The
         # ground's sample grid is kept the same size either way.
-        self.pixel_size = self.s["pixel_size"] if self.s["pixel_size"] in (2, 4) else 2
+        self.pixel_size = self.s["pixel_size"] if self.s["pixel_size"] in (1, 2, 4) else 2
         ground_scale = max(1, self.s["ground_scale"] * 2 // self.pixel_size)
         self.view = render3d.View(config.FRAME_W // self.pixel_size, config.VIEW_H // self.pixel_size,
                                   self.s["fov_deg"],
