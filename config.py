@@ -76,6 +76,15 @@ DEFAULTS = {
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
     },
+    "windsock": {
+        # The shop's windsock (windsock.py), so it can be picked out from
+        # the air. Height in meters -- a 4-story building is ~14, about 7 px
+        # tall from a mile out; 40 reads as a windsock from a few km.
+        "height_m": "40",
+        # Compass direction the wind blows FROM (the sock points the other
+        # way). height_m = 0: no windsock.
+        "wind_from": "180",
+    },
     "exitrow": {
         # Which side of the cabin this tube is: port (P1) or starboard (P3).
         "side": "port",
@@ -120,6 +129,8 @@ def load():
         "clock": cp.get("view", "clock"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),
+        "windsock_height_m": cp.getfloat("windsock", "height_m"),
+        "windsock_wind_from": cp.getfloat("windsock", "wind_from"),
         "exit_side": cp.get("exitrow", "side").strip().lower(),
         "exit_airmetal_url": cp.get("exitrow", "airmetal_url"),
         "exit_fov_deg": cp.getfloat("exitrow", "fov_deg"),

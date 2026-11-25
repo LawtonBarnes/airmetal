@@ -79,6 +79,7 @@ import gate  # noqa: E402
 import output  # noqa: E402
 import render3d  # noqa: E402
 import scenery  # noqa: E402
+import windsock  # noqa: E402
 from geo import Projection  # noqa: E402
 
 AFT_M = 12.0  # the window, behind the cockpit
@@ -279,6 +280,8 @@ class App:
                                   self.s["exit_ground_scale"], self.s["ground_filter"], False,
                                   pixel_aspect=config.EXIT_PIXEL_ASPECT)
         self.view.line_range = self.s["exit_line_range"]
+        if self.s["windsock_height_m"] > 0:
+            self.view.set_props(windsock.build(self.s["windsock_height_m"], self.s["windsock_wind_from"]))
         flip = self.side == "starboard"
         self.art = {k: load_overlay(k, flip) for k in
                     ("wing_jet", "wing_cessna", "frame", "blades1", "blades2", "blades3")}

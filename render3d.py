@@ -39,6 +39,7 @@ import daylight
 import scenery as sc
 
 NEAR = 5.0  # m -- anything closer is clipped away
+PROP_DISTANCE_M = 20000.0  # props (the windsock) aren't drawn past this
 
 SKY_BANDS = [  # (degrees above the horizon, color) -- gradient anchors, matched
     # to the drone shots (2026-10-27): a pale, grayish horizon, blue only higher up
@@ -177,6 +178,7 @@ class View:
         # Optional (land h, land w) bool: ground samples worth computing.
         # EXITROW clears the ones hidden behind its wing art (see set_hidden).
         self.land_visible = None
+        self.props = []  # see set_props
         self.surface = pygame.Surface((width, height), 0, 32)
         # Every pixel's unit view ray in camera space (x right, y up, z forward).
         self.rays = self._rays(width, height, 1)
@@ -786,6 +788,67 @@ class View:
             drawn += 1
         return drawn
 
+    def set_props(self, props):
+        """Hand-placed 3D props (the shop's windsock): flat-shaded polygons,
+        each (world points (n, 3), rgb, outward normal or None = two-sided,
+        night floodlight or None -- an rgb light, 255 = full daylight). Packed once so a frame transforms
+        them all in one go."""
+        self.props = props
+        if not props:
+            return
+        self.prop_pts = np.concatenate([p[0] for p in props]).astype(np.float32)
+        lens = np.array([len(p[0]) for p in props])
+        self.prop_bounds = np.concatenate([[0], np.cumsum(lens)]).astype(np.int64)
+        self.prop_mid = np.add.reduceat(self.prop_pts, self.prop_bounds[:-1]) / lens[:, None]
+        self.prop_normal = np.array([p[2] if p[2] is not None else (0, 0, 0) for p in props], np.float32)
+        self.prop_two_sided = np.array([p[2] is None for p in props])
+        self.prop_color = np.array([p[1] for p in props], np.float32)
+        self.prop_flood = np.array([p[3] if p[3] is not None else (0, 0, 0) for p in props], np.float32)
+        self.prop_center = self.prop_pts.mean(0)
+
+    def draw_props(self):
+        """self.props, painter's algorithm (see set_props)."""
+        if not self.props:
+            return 0
+        pos = self.pos
+        if math.hypot(self.prop_center[0] - pos[0], self.prop_center[2] - pos[2]) > PROP_DISTANCE_M:
+            return 0
+        cam = self.to_camera(self.prop_pts)
+        if cam[:, 2].max() < NEAR:
+            return 0
+        scr = self.to_screen(cam)
+        front = cam[:, 2] >= NEAR
+        if front.all() and (scr[:, 0].max() < 0 or scr[:, 0].min() > self.w
+                            or scr[:, 1].max() < 0 or scr[:, 1].min() > self.h):
+            return 0
+        to_cam = pos - self.prop_mid
+        facing = self.prop_two_sided | ((self.prop_normal * to_cam).sum(1) > 0)
+        dist = np.linalg.norm(to_cam, axis=1)
+        sun = np.array([self.sun_dir[0], 0.6, self.sun_dir[1]], np.float32)
+        sun /= np.linalg.norm(sun)
+        shade = np.where(self.prop_two_sided, 0.8, 0.6 + 0.4 * np.maximum(self.prop_normal @ sun, 0.0))
+        f = haze_amount(dist)[:, None]
+        # A floodlight lights the paint (keeps the stripes), on with the city's lights.
+        light = LIGHT + self.prop_flood / 255.0 * LIGHTS_ON
+        colors = self.prop_color * shade[:, None] * light * (1 - f) + HAZE * f
+        colors = np.clip(colors, 0, 255).astype(int).tolist()
+        b = self.prop_bounds.tolist()
+        drawn = 0
+        for i in np.nonzero(facing)[0][np.argsort(-dist[facing])].tolist():
+            a, e = b[i], b[i + 1]
+            if front[a:e].all():
+                pts = scr[a:e]
+            else:
+                poly = _clip_near(cam[a:e])
+                if len(poly) < 3:
+                    continue
+                pts = self.to_screen(poly)
+            pts = _clip_rect(pts, -2, -2, self.w + 2, self.h + 2)
+            if len(pts) >= 3:
+                pygame.draw.polygon(self.surface, colors[i], pts.tolist())
+                drawn += 1
+        return drawn
+
     def draw_trees(self):
         """Pyramid trees near the camera, on low rides. Positions come from
         the land-cover raster around the camera, hashed per texel; trees
@@ -900,6 +963,7 @@ class View:
         self.draw_lakes(world)
         n = self.draw_lines(world.lines)
         self.draw_buildings(world)
+        self.draw_props()
         self.draw_trees()
         return n
 

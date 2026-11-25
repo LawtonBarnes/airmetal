@@ -56,6 +56,7 @@ import panel as panelmod  # noqa: E402
 import render3d  # noqa: E402
 import scenery  # noqa: E402
 import screens  # noqa: E402
+import windsock  # noqa: E402
 from geo import M_PER_NM  # noqa: E402
 
 # Standby, and the scenery check against the drone photos: 400 ft over the
@@ -93,6 +94,8 @@ class App:
                                   self.world, self.s["ground_scale"], self.s["ground_filter"],
                                   self.s["trees"])
         self.view.line_range = self.s["line_range"]
+        if self.s["windsock_height_m"] > 0:
+            self.view.set_props(windsock.build(self.s["windsock_height_m"], self.s["windsock_wind_from"]))
         self.dither = (dithermod.Dither(self.view.surface, render3d.sky_colors(dithermod.SKY_ELEVATIONS))
                        if self.s["dither"] else None)
         self.view_big = pygame.Surface((config.FRAME_W, config.VIEW_H))
