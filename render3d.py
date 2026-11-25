@@ -162,11 +162,21 @@ def sky_colors(elevations):
 
 
 class View:
-    def __init__(self, width, height, fov_deg, land=None, ground_scale=2, ground_filter="smooth", trees=True):
+    def __init__(self, width, height, fov_deg, land=None, ground_scale=2, ground_filter="smooth", trees=True,
+                 pixel_aspect=1.0):
         """`land`: a Scenery with a land-cover raster, for the textured ground
-        (None, or a Scenery without one: flat ground)."""
+        (None, or a Scenery without one: flat ground). `pixel_aspect`: a
+        pixel's shown width / height -- 1 on the XGA wall, 8/9 for 720x480
+        shown 4:3 on an NTSC tube (EXITROW)."""
         self.w, self.h = width, height
         self.focal = width / 2 / math.tan(math.radians(fov_deg) / 2)
+        self.focal_y = self.focal * pixel_aspect  # vertical pixels per unit
+        # Roads etc. are drawn out to this share of each style's distance
+        # (EXITROW looks down and sideways and has less time to spare).
+        self.line_range = 1.0
+        # Optional (land h, land w) bool: ground samples worth computing.
+        # EXITROW clears the ones hidden behind its wing art (see set_hidden).
+        self.land_visible = None
         self.surface = pygame.Surface((width, height), 0, 32)
         # Every pixel's unit view ray in camera space (x right, y up, z forward).
         self.rays = self._rays(width, height, 1)
@@ -204,6 +214,24 @@ class View:
         self._flat_palette()
         self.sky_scale = (SKY_STEPS - 1) / math.sin(math.radians(SKY_TOP_DEG))
 
+    def set_hidden(self, hidden):
+        """hidden: (h, w) bool at the view's size, True where something opaque
+        will be drawn over the view (EXITROW's window art) -- or None. Ground
+        samples wholly hidden, with a sample's margin so the smooth upscale
+        doesn't pull sky color in at the edges, aren't computed."""
+        if hidden is None or not self.ground_smooth or self.land is None:
+            self.land_visible = None
+            return
+        lh, lw = self.land_rays.shape[:2]
+        sy, sx = hidden.shape[0] // lh, hidden.shape[1] // lw
+        cover = hidden[:lh * sy, :lw * sx].reshape(lh, sy, lw, sx).all(axis=(1, 3))
+        padded = np.pad(cover, 1, constant_values=False)
+        eroded = cover.copy()
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                eroded &= padded[1 + dy:1 + dy + lh, 1 + dx:1 + dx + lw]
+        self.land_visible = (~eroded).ravel()
+
     def _sky_1d(self, steps):
         """The sky gradient for the 8-bit palettes: no sun-side glow, the
         directions away from and toward the sun averaged."""
@@ -224,7 +252,7 @@ class View:
         """Unit view rays (h, w, 3) through the centers of a w x h grid of
         scale x scale pixel blocks."""
         px, py = np.meshgrid((np.arange(w) + 0.5) * scale, (np.arange(h) + 0.5) * scale)
-        rays = np.stack([(px - self.w / 2) / self.focal, (self.h / 2 - py) / self.focal, np.ones_like(px)], -1)
+        rays = np.stack([(px - self.w / 2) / self.focal, (self.h / 2 - py) / self.focal_y, np.ones_like(px)], -1)
         return (rays / np.linalg.norm(rays, axis=-1, keepdims=True)).astype(np.float32)
 
     def _init_land(self, scale):
@@ -388,7 +416,7 @@ class View:
     def to_screen(self, cam):
         z = np.maximum(cam[..., 2], NEAR)
         return np.stack([self.w / 2 + self.focal * cam[..., 0] / z,
-                         self.h / 2 - self.focal * cam[..., 1] / z], -1)
+                         self.h / 2 - self.focal_y * cam[..., 1] / z], -1)
 
     # -- sky and ground ----------------------------------------------------
 
@@ -460,7 +488,10 @@ class View:
             toward = world[:, 0] * sx + world[:, 2] * sz
             az_i = np.clip(((toward + 1) * ((SKY_AZ_STEPS - 1) / 2) + 0.5).astype(np.int32), 0, SKY_AZ_STEPS - 1)
             out = self.sky_lut[az_i, sky_i]
-        g = np.nonzero(sin_e < -1e-4)[0]
+        ground = sin_e < -1e-4
+        if self.land_visible is not None:
+            ground &= self.land_visible
+        g = np.nonzero(ground)[0]
         if len(g):
             w = world[g]
             down = -w[:, 1]
@@ -582,12 +613,14 @@ class View:
                 draw(self.surface, colors[k], pts.tolist())
 
     def draw_lines(self, lines):
-        chunks = lines.chunks_in(sc.Scenery.cells_ahead(self.pos[0], self.pos[2], self.heading, MAX_LINE_M))
+        style_dist = STYLE_DIST * self.line_range
+        chunks = lines.chunks_in(sc.Scenery.cells_ahead(self.pos[0], self.pos[2], self.heading,
+                                                        MAX_LINE_M * self.line_range))
         # Each style has its own draw distance -- cull on chunk centers first.
         rel = lines.chunk_center[chunks] - (self.pos[0], self.pos[2])
         fx, fz = math.sin(math.radians(self.heading)), math.cos(math.radians(self.heading))
         r = lines.chunk_radius[chunks]
-        chunks = chunks[(np.hypot(rel[:, 0], rel[:, 1]) - r < STYLE_DIST[lines.chunk_style[chunks]])
+        chunks = chunks[(np.hypot(rel[:, 0], rel[:, 1]) - r < style_dist[lines.chunk_style[chunks]])
                         & (rel[:, 0] * fx + rel[:, 1] * fz > -r)]
         if not len(chunks):
             return 0
@@ -606,7 +639,7 @@ class View:
         sxmax = np.maximum.reduceat(scr[:, 0], first)
         symin = np.minimum.reduceat(scr[:, 1], first)
         symax = np.maximum.reduceat(scr[:, 1], first)
-        max_dist = STYLE_DIST[style]
+        max_dist = style_dist[style]
         # Line-of-sight distance to each chunk's nearest point (for culling),
         # and its average (for the one haze color the chunk is drawn in).
         d2 = (cam * cam).sum(axis=1)
@@ -854,7 +887,7 @@ class View:
         cam = self.star_dirs @ self.rot.T
         on = cam[:, 2] > 0.05
         x = (self.w / 2 + self.focal * cam[on, 0] / cam[on, 2]).astype(np.int32)
-        y = (self.h / 2 - self.focal * cam[on, 1] / cam[on, 2]).astype(np.int32)
+        y = (self.h / 2 - self.focal_y * cam[on, 1] / cam[on, 2]).astype(np.int32)
         b = (self.star_bright[on] * k).astype(np.int32)
         inside = (x >= 0) & (x < self.w) & (y >= 0) & (y < self.h)
         surf = self.surface

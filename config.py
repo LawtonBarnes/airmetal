@@ -22,6 +22,13 @@ VIEW_H = 384  # the top two tubes: the windshield
 VIEW_LOW_W, VIEW_LOW_H = 512, 192  # 3D render size, pixel-doubled to 1024x384
 TARGET_FPS = 10
 
+# EXITROW (exitrow.py): one puppet tube, 720x480 shown 4:3 (pixels 8/9 as
+# wide as tall). The 3D view renders at half size and is pixel-doubled.
+EXIT_FRAME_W, EXIT_FRAME_H = 720, 480
+EXIT_VIEW_W, EXIT_VIEW_H = 360, 240
+EXIT_PIXEL_ASPECT = (4 / 3) / (720 / 480)
+EXIT_ART_DIR = os.path.join(BASE_DIR, "exitrow_art")
+
 DEFAULTS = {
     "location": {
         "name": "METAL SHOP",
@@ -61,9 +68,33 @@ DEFAULTS = {
         # 4x4 ordered dither, so ground, roads and sky look like one engine
         # (on/off; ~17ms a frame on a Pi 3B+). Picked on the wall 2026-10-29.
         "dither": "on",
+        # Roads etc. are drawn out to this share of each style's distance
+        # (scenery.LINE_STYLES). Full range sometimes drew roads past the
+        # horizon haze (user, 2026-11-25); EXITROW's half range looked right.
+        "line_range": "0.5",
         # How far behind live the camera flies, so it can interpolate
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
+    },
+    "exitrow": {
+        # Which side of the cabin this tube is: port (P1) or starboard (P3).
+        "side": "port",
+        # AIR METAL's ride link on QUAD: which aircraft to look out of.
+        "airmetal_url": "http://192.168.68.71:8430/riding",
+        "fov_deg": "60",
+        # Degrees below level the window looks (plus the aircraft's bank).
+        "look_down": "15",
+        # Standby: parked at a gate (Love Field, nose toward the concourse).
+        "gate_lat": "32.84649",
+        "gate_lon": "-96.85010",
+        "gate_heading": "135",
+        # Roads drawn out to this share of AIR METAL's distances -- the
+        # side window looks down, and a Pi 3B+ has ~100 ms a frame.
+        "line_range": "0.5",
+        # The textured ground's sample grid, 1/this of the 360x240 view
+        # (AIR METAL's [view] ground_scale is the windshield's). 3 = 120x80:
+        # a little softer than 2, about half the work.
+        "ground_scale": "3",
     },
 }
 
@@ -85,7 +116,17 @@ def load():
         "trees": cp.getboolean("view", "trees"),
         "dither": cp.getboolean("view", "dither"),
         "saturation": cp.getfloat("view", "saturation"),
+        "line_range": cp.getfloat("view", "line_range"),
         "clock": cp.get("view", "clock"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),
+        "exit_side": cp.get("exitrow", "side").strip().lower(),
+        "exit_airmetal_url": cp.get("exitrow", "airmetal_url"),
+        "exit_fov_deg": cp.getfloat("exitrow", "fov_deg"),
+        "exit_look_down": cp.getfloat("exitrow", "look_down"),
+        "exit_gate_lat": cp.getfloat("exitrow", "gate_lat"),
+        "exit_gate_lon": cp.getfloat("exitrow", "gate_lon"),
+        "exit_gate_heading": cp.getfloat("exitrow", "gate_heading"),
+        "exit_line_range": cp.getfloat("exitrow", "line_range"),
+        "exit_ground_scale": cp.getint("exitrow", "ground_scale"),
     }

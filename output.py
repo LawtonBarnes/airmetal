@@ -29,8 +29,10 @@ MOUSE_MOVE_THRESHOLD = 12  # cumulative REL_X/REL_Y units before it counts as on
 ACTIONS = ("home", "quit", "back", "power", "enter", "left", "right", "up", "down")
 
 
-def open_output(window):
-    return WindowOutput() if window else FramebufferOutput()
+def open_output(window, size=None, caption="AIR METAL"):
+    """size: the frame (w, h); default the wall's XGA. EXITROW passes 720x480."""
+    size = size or (config.FRAME_W, config.FRAME_H)
+    return WindowOutput(size, caption) if window else FramebufferOutput(size=size, name=caption)
 
 
 class WindowOutput:
@@ -45,9 +47,9 @@ class WindowOutput:
         pygame.K_LEFT: "left", pygame.K_RIGHT: "right", pygame.K_UP: "up", pygame.K_DOWN: "down",
     }
 
-    def __init__(self):
-        pygame.display.set_caption("AIR METAL")
-        self.screen = pygame.display.set_mode((config.FRAME_W, config.FRAME_H))
+    def __init__(self, size=(config.FRAME_W, config.FRAME_H), caption="AIR METAL"):
+        pygame.display.set_caption(caption)
+        self.screen = pygame.display.set_mode(size)
 
     def actions(self):
         out = []
@@ -63,12 +65,16 @@ class WindowOutput:
         self.screen.blit(bottom, (0, config.VIEW_H))
         pygame.display.flip()
 
+    def write_frame(self, surf):
+        self.screen.blit(surf, (0, 0))
+        pygame.display.flip()
+
     def close(self):
         pass
 
 
 class FramebufferOutput:
-    def __init__(self, dev="/dev/fb0"):
+    def __init__(self, dev="/dev/fb0", size=(config.FRAME_W, config.FRAME_H), name="AIR METAL"):
         global fcntl
         import fcntl  # noqa: F401 -- Linux only, like evdev
         import evdev
@@ -88,13 +94,14 @@ class FramebufferOutput:
         self.width, self.height = (int(x) for x in (sys_dir / "virtual_size").read_text().split(","))
         bpp = int((sys_dir / "bits_per_pixel").read_text())
         self.stride = int((sys_dir / "stride").read_text())
-        if (self.width, self.height, bpp) != (config.FRAME_W, config.FRAME_H, 16):
-            raise RuntimeError(f"AIR METAL needs a 1024x768 16bpp framebuffer, got "
+        if (self.width, self.height, bpp) != (size[0], size[1], 16):
+            raise RuntimeError(f"{name} needs a {size[0]}x{size[1]} 16bpp framebuffer, got "
                                f"{self.width}x{self.height} {bpp}bpp -- see config.txt")
         self.fd = os.open(dev, os.O_RDWR)
         self.mm = mmap.mmap(self.fd, self.stride * self.height, mmap.MAP_SHARED,
                             mmap.PROT_WRITE | mmap.PROT_READ)
         self.half = pygame.Surface((config.FRAME_W, config.VIEW_H), 0, 16)
+        self.full = pygame.Surface(size, 0, 16)
         self.vsync = True
         # Console into graphics mode so the text console can't draw over us.
         self.tty_fd = None
@@ -157,6 +164,24 @@ class FramebufferOutput:
                 self.vsync = False
         self._write_rows(top, 0)
         self._write_rows(bottom, config.VIEW_H)
+
+    def write_frame(self, surf):
+        """One whole frame (a single tube's app, e.g. EXITROW)."""
+        if self.vsync:
+            try:
+                fcntl.ioctl(self.fd, FBIO_WAITFORVSYNC, struct.pack("I", 0))
+            except OSError:
+                self.vsync = False
+        self.full.blit(surf, (0, 0))
+        raw = self.full.get_buffer().raw
+        row = self.width * 2
+        if self.stride == row:
+            self.mm.seek(0)
+            self.mm.write(raw)
+        else:
+            for y in range(self.height):
+                self.mm.seek(y * self.stride)
+                self.mm.write(raw[y * row:(y + 1) * row])
 
     def close(self):
         for d in self.devices:

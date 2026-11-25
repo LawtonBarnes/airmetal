@@ -92,6 +92,7 @@ class App:
         self.view = render3d.View(config.VIEW_LOW_W, config.VIEW_LOW_H, self.s["fov_deg"],
                                   self.world, self.s["ground_scale"], self.s["ground_filter"],
                                   self.s["trees"])
+        self.view.line_range = self.s["line_range"]
         self.dither = (dithermod.Dither(self.view.surface, render3d.sky_colors(dithermod.SKY_ELEVATIONS))
                        if self.s["dither"] else None)
         self.view_big = pygame.Surface((config.FRAME_W, config.VIEW_H))
@@ -106,7 +107,7 @@ class App:
         self.traffic = flight.Traffic(self.s["lat"], self.s["lon"])
         self.cam = flight.Camera(self.s["ground_msl_m"])
         self.director = directormod.Director()
-        self.link = link.RideServer(self.s["link_port"])
+        self.link = link.RideServer(self.s["link_port"], self.s["delay_sec"])
         self.riding = None  # hex of the aircraft being ridden
         self.handoff_until = 0.0
         self.f_card_big = pygame.font.Font(config.FONT_PATH, 30)

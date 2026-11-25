@@ -1,0 +1,11 @@
+#!/bin/sh
+# Installed as /usr/local/bin/exitrow (P1 port, P3 starboard). Runs
+# exitrow.py bound to the physical console (tty1) regardless of how this
+# was invoked -- same as /usr/local/bin/airmetal: the KD_GRAPHICS ioctl on
+# /dev/tty needs a real tty1 controlling terminal, which SSH sessions
+# don't provide.
+if [ "$(tty 2>/dev/null)" = "/dev/tty1" ]; then
+    exec python3 /opt/airmetal/exitrow.py "$@"
+else
+    exec sudo openvt -f -c 1 -s -w -- python3 /opt/airmetal/exitrow.py "$@"
+fi

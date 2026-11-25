@@ -33,6 +33,36 @@ with stars, the city's land cover glowing amber the way NASA's astronaut
 photos show Dallas, orange street lights on every road, white runway and
 blue taxiway lights, lit windows downtown. `[view] clock` pins a time.
 
+## EXITROW: the side windows
+
+`exitrow.py` runs on the single tubes either side of the wall -- P1 looks
+out the port side, P3 starboard (`[exitrow] side`). It flies whatever
+AIR METAL is riding (asked of AIR METAL's `GET :8430/riding`), from the
+same ADS-B feed through the same flight smoothing and the same delay, so
+every window shows one moment: readsb stamps each position with when it
+was received. The camera sits a little aft of the cockpit, turned 90
+degrees and looking 15 degrees down; the aircraft's bank tips the window
+up or down and its pitch tilts the horizon.
+
+Over the 3D view goes the user's window art (`exitrow_art/`, rebuilt from
+the PSD by `tools/build_exitrow_art.py`): a jet wing, a Cessna's high wing
+and strut for light aircraft (A1/B1/B4/B6), or rotor blades flickering
+through three frames for helicopters (A7). Starboard is the same art
+mirrored. With nothing to ride, the window shows the aircraft parked at a
+gate at Love Field (`gate.py`, modeled -- the 8 m aerial photo is mush
+from a cabin window), lit for the time of day.
+
+720x480 shown 4:3: it renders 360x240 with 8:9 pixels and pixel-doubles.
+To fit a Pi 3B+ in ~100 ms a frame: the dither and output run on a second
+thread, roads go out to half range, the textured ground is sampled on a
+120x80 grid, and no ground is computed behind the wing art. BACK = ABOUT,
+Power = the shutdown dialog, Home = SCRUTE's menu. `--replay FILE` or
+`--standalone` picks aircraft itself (development).
+
+Install on P1/P3 as below, plus
+`sudo install -m 755 /opt/airmetal/exitrow-launcher /usr/local/bin/exitrow`
+and, on P3, `[exitrow] side = starboard` in `settings.ini`.
+
 ## Where the traffic comes from
 
 P4's readsb (the SDR that JOAN JET shows), polled over HTTP once a second:
