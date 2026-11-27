@@ -70,7 +70,10 @@ STANDBY_CAM = {"alt_m": 122.0, "pitch": -6.0, "heading0": 252.0, "pan_deg": 25.0
 BAR_LEFT_RIGHT_X = 462
 BAR_RIGHT_LEFT_X = 562
 BAR_BASELINE_Y = 347
-BAR_COLOR = (0xFF, 0xA5, 0x00)
+# JOAN JET's COLORTRAK colors: cyan airplanes, magenta helicopters, white status.
+BAR_PLANE = (0x00, 0xFF, 0xFF)
+BAR_HELI = (0xFF, 0x00, 0xFF)
+BAR_STATUS = (0xFF, 0xFF, 0xFF)
 COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 LIGHTING_SEC = 10.0  # how often the sun is recomputed
 EXIT_GOTO_HOME = 42  # see STRINGS/SCRUTE: Home hands off to the app menu
@@ -261,22 +264,23 @@ class App:
         return None
 
     def bar_runs(self, track):
-        """The bottom-bar text as (left runs, right runs); a run is (text, big?)."""
+        """The bottom-bar text as (color, left runs, right runs); a run is (text, big?)."""
         if track is None:
             right = "AIR CLR" if not getattr(self.feed, "error", None) else "NO DATA"
-            return [("STANDBY", True)], [(right, True)]
+            return BAR_STATUS, [("STANDBY", True)], [(right, True)]
         info = track.info
         cat = panelmod.CATEGORY_NAMES.get(info.category, "AIRCRAFT")
         c = self.cam
         dist = math.hypot(c.x, c.z) / M_PER_NM  # geo: x = east, z = north
         point = COMPASS[round(math.degrees(math.atan2(c.x, c.z)) % 360 / 45) % 8]
-        return ([(cat + " ", False), (info.callsign or info.hex.upper(), True)],
+        color = BAR_HELI if info.category in directormod.HELICOPTER else BAR_PLANE
+        return (color, [(cat + " ", False), (info.callsign or info.hex.upper(), True)],
                 [(f"{dist:.1f}", True), (" NM ", False), (point, True), (" OF SHOP", False)])
 
-    def _render_runs(self, runs):
+    def _render_runs(self, runs, color):
         """One strip for a run list; returns (surface, baseline y within it)."""
         fonts = [self.f_bar_big if big else self.f_bar_small for _, big in runs]
-        imgs = [f.render(t, True, BAR_COLOR) for f, (t, _) in zip(fonts, runs)]
+        imgs = [f.render(t, True, color) for f, (t, _) in zip(fonts, runs)]
         ascent = max(f.get_ascent() for f in fonts)
         h = ascent + max(f.get_descent() * -1 for f in fonts)
         strip = pygame.Surface((sum(i.get_width() for i in imgs), h), pygame.SRCALPHA)
@@ -291,7 +295,8 @@ class App:
         surf.blit(self.windshield, (0, 0))
         runs = self.bar_runs(track)
         if runs != self.bar_cache[0]:
-            self.bar_cache = (runs, [self._render_runs(r) for r in runs])
+            color, *sides = runs
+            self.bar_cache = (runs, [self._render_runs(r, color) for r in sides])
         (left, la), (right, ra) = self.bar_cache[1]
         surf.blit(left, (BAR_LEFT_RIGHT_X - left.get_width(), BAR_BASELINE_Y - la))
         surf.blit(right, (BAR_RIGHT_LEFT_X, BAR_BASELINE_Y - ra))
