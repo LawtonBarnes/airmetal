@@ -1,7 +1,7 @@
 """The windshield's optional softening, so the wall's 21" tubes look more
 like EXITROW's 14" ones (user, 2026-11-25: "a mild blur on the upper
 half"). Applied while pixel-doubling the 512x192 render up to 1024x384,
-after the dither, before the handoff card -- so text stays sharp.
+after the dither, before the windshield frame and its text -- so they stay sharp.
 
   off   plain pixel-doubling (as before)
   soft  a smooth (bilinear) 2x upscale instead: edges and the dither

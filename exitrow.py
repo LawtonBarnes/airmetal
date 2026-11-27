@@ -426,7 +426,7 @@ class App:
             return "WAITING FOR AIR METAL"
         if getattr(self.feed, "error", None):
             return "NO ADS-B DATA"
-        return "WAITING FOR TRAFFIC"
+        return None  # no traffic: just the terminal or the sky, no text
 
     # -- drawing -----------------------------------------------------------
 

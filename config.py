@@ -15,6 +15,7 @@ SPLASH_FONT_PATH = os.path.join(BASE_DIR, "FjallaOne-Regular.ttf")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 SPLASH_PATH = os.path.join(BASE_DIR, "splash.png")  # optional -- see screens.build_splash
 LOGO_PATH = os.path.join(BASE_DIR, "metalshop-logo.png")  # ABOUT screen
+WINDSHIELD_PATH = os.path.join(BASE_DIR, "windshield.png")  # frame matte over the view (1024x384)
 
 # The wall: one XGA frame, split 2x2 by the OREI into 512x384 quadrants.
 FRAME_W, FRAME_H = 1024, 768

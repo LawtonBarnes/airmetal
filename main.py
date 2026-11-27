@@ -63,7 +63,15 @@ from geo import M_PER_NM  # noqa: E402
 # Standby, and the scenery check against the drone photos: 400 ft over the
 # Metal Shop, panning slowly from White Rock Lake toward downtown.
 STANDBY_CAM = {"alt_m": 122.0, "pitch": -6.0, "heading0": 252.0, "pan_deg": 25.0, "pan_sec": 60.0}
-HANDOFF_SEC = 6.0
+# The windshield frame's bottom bar (windshield.png, from the user's
+# AIR-METAL-WINDSCREEN-OVERLAY.psd): "LARGE SWA4095" right-aligned to the
+# left of center, "6.5 NM NE OF SHOP" left-aligned to the right, big words
+# 30 px and small ones 15 px, sharing one baseline.
+BAR_LEFT_RIGHT_X = 462
+BAR_RIGHT_LEFT_X = 562
+BAR_BASELINE_Y = 347
+BAR_COLOR = (0xFF, 0xA5, 0x00)
+COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 LIGHTING_SEC = 10.0  # how often the sun is recomputed
 EXIT_GOTO_HOME = 42  # see STRINGS/SCRUTE: Home hands off to the app menu
 
@@ -121,9 +129,10 @@ class App:
         self.director = directormod.Director()
         self.link = link.RideServer(self.s["link_port"], self.s["delay_sec"])
         self.riding = None  # hex of the aircraft being ridden
-        self.handoff_until = 0.0
-        self.f_card_big = pygame.font.Font(config.FONT_PATH, 30)
-        self.f_card = pygame.font.Font(config.FONT_PATH, 20)
+        self.f_bar_big = pygame.font.Font(config.FONT_PATH, 30)
+        self.f_bar_small = pygame.font.Font(config.FONT_PATH, 15)
+        self.windshield = pygame.image.load(config.WINDSHIELD_PATH)
+        self.bar_cache = (None, None)  # (the text runs, their rendered strip)
         self.last_report_wall = time.time()
         while time.time() < splash_until and not self.quit_requested:
             self.out.actions()  # keys during the splash are dropped, not queued
@@ -207,8 +216,6 @@ class App:
             return
         self.riding = hex_
         self.cam.reset()
-        if hex_:
-            self.handoff_until = time.time() + HANDOFF_SEC
 
     # -- frame ---------------------------------------------------------------
 
@@ -253,31 +260,41 @@ class App:
         c.msl_ft = (self.s["ground_msl_m"] + c.y) / 0.3048
         return None
 
-    def draw_card(self, surf, track):
-        """The handoff card: who we're riding now, top-left of the windshield's safe area."""
+    def bar_runs(self, track):
+        """The bottom-bar text as (left runs, right runs); a run is (text, big?)."""
+        if track is None:
+            right = "AIR CLR" if not getattr(self.feed, "error", None) else "NO DATA"
+            return [("STANDBY", True)], [(right, True)]
         info = track.info
-        lines = [(self.f_card_big, info.callsign or info.hex.upper(), panelmod.YELLOW),
-                 (self.f_card, panelmod.CATEGORY_NAMES.get(info.category, "AIRCRAFT"), panelmod.WHITE),
-                 (self.f_card, f"{self.cam.msl_ft:,.0f} FT  {self.cam.gs_kt:.0f} KTS", panelmod.WHITE),
-                 (self.f_card, f"{math.hypot(self.cam.x, self.cam.z) / M_PER_NM:.1f} NM FROM SHOP", panelmod.WHITE)]
-        imgs = [(f.render(t, False, c)) for f, t, c in lines]
-        w = max(i.get_width() for i in imgs) + 28
-        h = sum(i.get_height() + 4 for i in imgs) + 20
-        box = pygame.Rect(64, 50, w, h)
-        pygame.draw.rect(surf, (0, 0, 0), box)
-        pygame.draw.rect(surf, panelmod.ORANGE, box, 3)
-        y = box.y + 10
-        for img in imgs:
-            surf.blit(img, (box.x + 14, y))
-            y += img.get_height() + 4
+        cat = panelmod.CATEGORY_NAMES.get(info.category, "AIRCRAFT")
+        c = self.cam
+        dist = math.hypot(c.x, c.z) / M_PER_NM  # geo: x = east, z = north
+        point = COMPASS[round(math.degrees(math.atan2(c.x, c.z)) % 360 / 45) % 8]
+        return ([(cat + " ", False), (info.callsign or info.hex.upper(), True)],
+                [(f"{dist:.1f}", True), (" NM ", False), (point, True), (" OF SHOP", False)])
 
-    def draw_standby(self, surf):
-        msg = "STANDBY - WAITING FOR TRAFFIC" if not getattr(self.feed, "error", None) else "NO ADS-B DATA"
-        img = self.f_card.render(msg, False, panelmod.YELLOW)
-        box = img.get_rect(midbottom=(config.FRAME_W // 2, config.VIEW_H - 50)).inflate(28, 16)
-        pygame.draw.rect(surf, (0, 0, 0), box)
-        pygame.draw.rect(surf, panelmod.ORANGE, box, 3)
-        surf.blit(img, img.get_rect(center=box.center))
+    def _render_runs(self, runs):
+        """One strip for a run list; returns (surface, baseline y within it)."""
+        fonts = [self.f_bar_big if big else self.f_bar_small for _, big in runs]
+        imgs = [f.render(t, True, BAR_COLOR) for f, (t, _) in zip(fonts, runs)]
+        ascent = max(f.get_ascent() for f in fonts)
+        h = ascent + max(f.get_descent() * -1 for f in fonts)
+        strip = pygame.Surface((sum(i.get_width() for i in imgs), h), pygame.SRCALPHA)
+        x = 0
+        for f, img in zip(fonts, imgs):
+            strip.blit(img, (x, ascent - f.get_ascent()))
+            x += img.get_width()
+        return strip, ascent
+
+    def draw_windshield(self, surf, track):
+        """The frame matte, then callsign / distance + direction in its bottom bar."""
+        surf.blit(self.windshield, (0, 0))
+        runs = self.bar_runs(track)
+        if runs != self.bar_cache[0]:
+            self.bar_cache = (runs, [self._render_runs(r) for r in runs])
+        (left, la), (right, ra) = self.bar_cache[1]
+        surf.blit(left, (BAR_LEFT_RIGHT_X - left.get_width(), BAR_BASELINE_Y - la))
+        surf.blit(right, (BAR_RIGHT_LEFT_X, BAR_BASELINE_Y - ra))
 
     def run(self):
         clock = pygame.time.Clock()
@@ -312,10 +329,7 @@ class App:
                 if self.dither is not None:
                     self.dither.apply()
                 blurmod.upscale(self.view.surface, self.view_big, self.blur)
-                if track is not None and time.time() < self.handoff_until:
-                    self.draw_card(self.view_big, track)
-                elif track is None:
-                    self.draw_standby(self.view_big)
+                self.draw_windshield(self.view_big, track)
                 top = self.view_big
             if self.power_dialog is not None:
                 self.screens.draw_power_dialog(top, self.power_dialog)
