@@ -47,7 +47,7 @@ import config
 import daylight
 import dither as dithermod
 
-VERSION = "0.1"  # EXITROW's own (STRINGS/SCRUTE read it from this file)
+VERSION = "0.9"  # EXITROW's own (STRINGS/SCRUTE read it from this file)
 
 
 def parse_args():

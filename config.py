@@ -6,7 +6,7 @@ what differs between hosts or gets tuned live; everything else lives here.
 import configparser
 import os
 
-VERSION = "0.1"
+VERSION = "0.9"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings.ini")
