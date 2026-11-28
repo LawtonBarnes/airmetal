@@ -18,7 +18,9 @@ flickering through three frames under the user's chopper window matte
 (heli_window.png, from CHOPPER-WINDOW-MATTE-W-SLIDE.png, alpha cut at
 50% for a colorkey blit). The art is drawn as the port window;
 starboard is the same art mirrored. The wings are tinted with the sky's
-color as the light changes, down to dark gray at night (tint_wing).
+color as the light changes, down to dark gray at night (tint_wing); from
+sunset on, the jet wing's red lights (wing_jet_lights.png) are lit over
+it, untinted.
 
 With nothing to ride (AIR METAL in standby, or not running), the window
 shows the aircraft parked at a gate (gate.py).
@@ -96,6 +98,7 @@ LINK_TIMEOUT_SEC = 6.0  # no answer from AIR METAL this long: it's not there
 EXIT_GOTO_HOME = 42  # see STRINGS/SCRUTE: Home hands off to the app menu
 COLORKEY = (255, 0, 255)
 TINTED_ART = ("wing_jet", "wing_cessna")
+WING_LIGHTS_ON = 0.1  # lighting.lights_on above this (sun under ~3 deg): the jet's red lights are lit
 WING_SKY_TINT = 0.5  # how far the wings take on the sky's hue (0 = none, 1 = multiplied by it)
 WING_NIGHT_GRAY = 0.3  # the darkest the wings get: dark gray, not black
 NOTE_FG, NOTE_EDGE = (255, 220, 0), (255, 165, 0)
@@ -323,7 +326,9 @@ class App:
             self.view.set_props(windsock.build(self.s["windsock_height_m"], self.s["windsock_wind_from"]))
         flip = self.side == "starboard"
         self.art = {k: load_overlay(k, flip) for k in
-                    ("wing_jet", "wing_cessna", "heli_window", "blades1", "blades2", "blades3")}
+                    ("wing_jet", "wing_jet_lights", "wing_cessna", "heli_window",
+                     "blades1", "blades2", "blades3")}
+        self.wing_lights = False
         self.art_src = {k: load_art_source(k, flip) for k in TINTED_ART}
         # What each kind of window hides of the view (blades flicker, so only
         # the window matte counts for helicopters).
@@ -432,6 +437,7 @@ class App:
         elev, az = daylight.sun_position(t, self.s["lat"], self.s["lon"])
         lighting = daylight.lighting_at(elev, az)
         self.view.set_lighting(lighting, self.world)
+        self.wing_lights = lighting.lights_on > WING_LIGHTS_ON
         tint = wing_tint(lighting)
         last = getattr(self, "wing_tint", None)
         if last is None or np.abs(tint - last).max() > 0.004:  # all day long it doesn't change
@@ -439,12 +445,15 @@ class App:
             self.wing_tinted = {}  # retinted on next use, only the wing on screen (~75 ms each on a 3B+)
 
     def wing(self, name):
-        """A wing overlay in the current sky tint. A fresh surface is swapped
-        in whole, so the presenter thread never blits a half-tinted wing."""
+        """A wing's overlays: the art in the current sky tint (a fresh surface
+        swapped in whole, so the presenter thread never blits a half-tinted
+        wing), plus the jet's lit red lights from sunset on."""
         if not self.wing_tinted.get(name):
             self.art[name] = tint_wing(self.art_src[name], self.wing_tint)
             self.wing_tinted[name] = True
-        return self.art[name]
+        if name == "wing_jet" and self.wing_lights:
+            return [self.art[name], self.art["wing_jet_lights"]]
+        return [self.art[name]]
 
     # -- what to show ------------------------------------------------------
 
@@ -505,7 +514,7 @@ class App:
             overlays = [self.art[f"blades{self.blade_i + 1}"], self.art["heli_window"]]
             self.blade_i = (self.blade_i + 1) % 3
         else:
-            overlays = [self.wing("wing_cessna" if kind == "cessna" else "wing_jet")]
+            overlays = self.wing("wing_cessna" if kind == "cessna" else "wing_jet")
         self.presenter.submit(self.view.surface, overlays)
         self.gate_ready = False
 
@@ -524,7 +533,7 @@ class App:
         self.view.set_camera(x, gate.WINDOW_HEIGHT_M, z, (heading + self.sgn * 90) % 360, -GATE_LOOK_DOWN, 0.0)
         self.view.render(self.world)
         gate.draw(self.view, gx, gz, heading)
-        self.presenter.submit(self.view.surface, [self.wing("wing_jet")], self.note(), keep=True)
+        self.presenter.submit(self.view.surface, self.wing("wing_jet"), self.note(), keep=True)
         self.gate_ready = True
         self.gate_drawn_at = now
 

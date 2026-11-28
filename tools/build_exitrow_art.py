@@ -6,9 +6,11 @@
 The PSD is 720x480, drawn as the PORT window (the starboard window is the
 same art flipped left-right at run time). Layers used:
   Jet Wing, Cessna Wing   wing + the rounded black window frame, together
-  BLADES1..3              rotor blades along the top, no frame
-Written: wing_jet.png, wing_cessna.png, blades1-3.png (RGBA, full frame),
-plus frame.png -- the window frame alone, for helicopters (blades go
+  Jet Wing Red Lights     the jet wing's lit red lights (sunset/night, untinted)
+  BLADES1..3(.png)        rotor blades along the top
+  Chopper Overlay         the helicopter window matte (over the blades)
+Written: wing_jet.png, wing_jet_lights.png, wing_cessna.png, blades1-3.png,
+heli_window.png (RGBA, full frame, alpha cut at 50%), plus frame.png -- the window frame alone, for helicopters (blades go
 under it). The frame comes from the jet layer's left edge, where nothing
 but frame is drawn, mirrored to the right. (Helicopters show the blades
 with no frame since 2026-11-25; frame.png is kept for trying it again.)
@@ -28,14 +30,16 @@ from psd_tools import PSDImage
 
 W, H = 720, 480
 SPLASH_SHOWN_W = 600
-LAYERS = {"Jet Wing": "wing_jet", "Cessna Wing": "wing_cessna",
-          "BLADES1": "blades1", "BLADES2": "blades2", "BLADES3": "blades3"}
+LAYERS = {"Jet Wing": "wing_jet", "Jet Wing Red Lights": "wing_jet_lights", "Cessna Wing": "wing_cessna",
+          "BLADES1": "blades1", "BLADES2": "blades2", "BLADES3": "blades3",
+          "Chopper Overlay": "heli_window"}
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "exitrow_art")
 
 
 def full_frame(layer):
     """A layer on a transparent 720x480 canvas (layers may hang off the edges)."""
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    layer.visible = True  # hidden layers (often the Cessna) composite empty otherwise
     img = layer.composite(force=True).convert("RGBA")
     x0, y0 = layer.bbox[:2]
     canvas.alpha_composite(img, (max(0, x0), max(0, y0)), (max(0, -x0), max(0, -y0)))
@@ -64,7 +68,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     found = {}
     for layer in psd:
-        name = LAYERS.get(layer.name)
+        name = LAYERS.get(layer.name.removesuffix(".png"))
         if name:
             img = full_frame(layer)
             # Hard edges only: the Pi blits these colorkeyed.
