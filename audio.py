@@ -102,7 +102,7 @@ def prop(rng, buzz_hz=80.0, seconds=4.0):
 # -- playback --------------------------------------------------------------
 
 class FlyoverSound:
-    def __init__(self, range_nm=1.5, volume=0.8, enabled=True):
+    def __init__(self, range_nm=4.0, volume=0.8, enabled=True):
         self.range_nm = max(0.1, range_nm)
         self.volume = max(0.0, min(1.0, volume))
         self.channels = {}

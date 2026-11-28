@@ -96,7 +96,7 @@ DEFAULTS = {
         # Flyover sound for the aircraft being ridden (audio.py): on/off.
         "enabled": "on",
         # Silent past this slant range from the shop (NM); loudest right at it.
-        "range_nm": "1.5",
+        "range_nm": "4",
         # Master level, 0-1, before the amp.
         "volume": "0.8",
     },
