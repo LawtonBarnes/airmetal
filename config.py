@@ -92,6 +92,14 @@ DEFAULTS = {
         # between position reports instead of guessing ahead of them.
         "delay_sec": "2.5",
     },
+    "audio": {
+        # Flyover sound for the aircraft being ridden (audio.py): on/off.
+        "enabled": "on",
+        # Silent past this slant range from the shop (NM); loudest right at it.
+        "range_nm": "1.5",
+        # Master level, 0-1, before the amp.
+        "volume": "0.8",
+    },
     "windsock": {
         # The shop's windsock (windsock.py), so it can be picked out from
         # the air. Height in meters -- a 4-story building is ~14, about 7 px
@@ -149,6 +157,9 @@ def load():
         "clock": cp.get("view", "clock"),
         "delay_sec": cp.getfloat("view", "delay_sec"),
         "link_port": cp.getint("link", "port"),
+        "audio_enabled": cp.getboolean("audio", "enabled"),
+        "audio_range_nm": cp.getfloat("audio", "range_nm"),
+        "audio_volume": cp.getfloat("audio", "volume"),
         "windsock_height_m": cp.getfloat("windsock", "height_m"),
         "windsock_wind_from": cp.getfloat("windsock", "wind_from"),
         "exit_side": cp.get("exitrow", "side").strip().lower(),

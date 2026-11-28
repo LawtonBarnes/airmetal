@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 
+import audio
 import blur as blurmod
 import config
 import daylight
@@ -37,6 +38,7 @@ def parse_args():
     ap.add_argument("--snap", help="save a frame to this directory every --snap-every seconds")
     ap.add_argument("--snap-every", type=float, default=10.0)
     ap.add_argument("--clock", help="light the scene as at this local time, HH:MM (overrides settings.ini)")
+    ap.add_argument("--mute", action="store_true", help="no flyover sound (dev)")
     return ap.parse_args()
 
 
@@ -51,6 +53,7 @@ import pygame  # noqa: E402
 import director as directormod  # noqa: E402
 import feed as feedmod  # noqa: E402
 import flight  # noqa: E402
+import gate  # noqa: E402
 import link  # noqa: E402
 import output  # noqa: E402
 import panel as panelmod  # noqa: E402
@@ -58,11 +61,16 @@ import render3d  # noqa: E402
 import scenery  # noqa: E402
 import screens  # noqa: E402
 import windsock  # noqa: E402
-from geo import M_PER_NM  # noqa: E402
+from geo import M_PER_NM, Projection  # noqa: E402
 
-# Standby, and the scenery check against the drone photos: 400 ft over the
-# Metal Shop, panning slowly from White Rock Lake toward downtown.
-STANDBY_CAM = {"alt_m": 122.0, "pitch": -6.0, "heading0": 252.0, "pan_deg": 25.0, "pan_sec": 60.0}
+# Standby: the cockpit of the jet parked at EXITROW's gate ([exitrow]
+# gate_lat/lon/heading), so the windshield and both side windows show the
+# same airport. gate.py's model is in meters from our aircraft's middle.
+GATE_COCKPIT_B = 12.5  # m ahead of the aircraft's middle (its nose is at 12-15)
+GATE_EYE_M = 4.3  # pilot's eye above the apron
+GATE_LOOK_UP = 2.0  # just enough to get the concourse roofline and a strip of sky in
+GATE_REDRAW_SEC = 10.0  # the gate is still; redraw it only for the light
+NIGHT_LIGHTS_ON = 0.5  # lighting.lights_on above this (about civil dusk): night panel
 # The windshield frame's bottom bar (windshield.png, from the user's
 # AIR-METAL-WINDSCREEN-OVERLAY.psd): "LARGE SWA4095" right-aligned to the
 # left of center, "6.5 NM NE OF SHOP" left-aligned to the right, big words
@@ -70,10 +78,10 @@ STANDBY_CAM = {"alt_m": 122.0, "pitch": -6.0, "heading0": 252.0, "pan_deg": 25.0
 BAR_LEFT_RIGHT_X = 462
 BAR_RIGHT_LEFT_X = 562
 BAR_BASELINE_Y = 347
-# JOAN JET's COLORTRAK colors: cyan airplanes, magenta helicopters, white status.
+# JOAN JET's COLORTRAK colors: cyan airplanes, magenta helicopters, yellow status.
 BAR_PLANE = (0x00, 0xFF, 0xFF)
 BAR_HELI = (0xFF, 0x00, 0xFF)
-BAR_STATUS = (0xFF, 0xFF, 0xFF)
+BAR_STATUS = (0xFF, 0xFF, 0x00)  # JOAN JET's yellow
 COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 LIGHTING_SEC = 10.0  # how often the sun is recomputed
 EXIT_GOTO_HOME = 42  # see STRINGS/SCRUTE: Home hands off to the app menu
@@ -82,6 +90,7 @@ EXIT_GOTO_HOME = 42  # see STRINGS/SCRUTE: Home hands off to the app menu
 class App:
     def __init__(self):
         self.s = config.load()
+        pygame.mixer.pre_init(audio.RATE, -16, 2, 2048)
         pygame.init()
         # After pygame.init(), which otherwise turns SIGTERM (how STRINGS stops
         # apps) into a QUIT event that nothing in fb mode ever reads.
@@ -123,6 +132,11 @@ class App:
         self.next_lighting = 0.0
         self.update_lighting()
         self.panel = panelmod.Panel()
+        self.panel.set_night(self.night)
+        self.gate_drawn_at = 0.0
+        self.gate_frame = None  # the composed gate windshield, reused for GATE_REDRAW_SEC
+        self.gate_xz = Projection(self.s["lat"], self.s["lon"]).to_xz(self.s["exit_gate_lat"],
+                                                                     self.s["exit_gate_lon"])
         if ARGS.replay:
             self.feed = feedmod.ReplayFeed(ARGS.replay, ARGS.speed, ARGS.offset)
         else:
@@ -137,6 +151,8 @@ class App:
         self.windshield = pygame.image.load(config.WINDSHIELD_PATH)
         self.bar_cache = (None, None)  # (the text runs, their rendered strip)
         self.last_report_wall = time.time()
+        self.sound = audio.FlyoverSound(self.s["audio_range_nm"], self.s["audio_volume"],
+                                        self.s["audio_enabled"] and not ARGS.mute)
         while time.time() < splash_until and not self.quit_requested:
             self.out.actions()  # keys during the splash are dropped, not queued
             time.sleep(0.05)
@@ -234,7 +250,12 @@ class App:
             lt = time.localtime(now)
             t = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hh, mm, 0, 0, 0, -1))
         elev, az = daylight.sun_position(t, self.s["lat"], self.s["lon"])
-        self.view.set_lighting(daylight.lighting_at(elev, az), self.world)
+        lighting = daylight.lighting_at(elev, az)
+        self.view.set_lighting(lighting, self.world)
+        self.night = lighting.lights_on > NIGHT_LIGHTS_ON
+        if hasattr(self, "panel"):
+            self.panel.set_night(self.night)
+        self.gate_drawn_at = 0.0  # relight the gate
 
     def update(self, dt):
         now = self.feed.clock()
@@ -251,15 +272,16 @@ class App:
             self.cam.follow(state, dt)
             return track
         self.link.riding = None
-        # Standby: hover over the Metal Shop, panning.
+        # Standby: in the cockpit at the gate.
         c = self.cam
         c.reset()
-        c.x = c.z = 0.0
-        c.y = STANDBY_CAM["alt_m"]
-        c.heading = STANDBY_CAM["heading0"] + STANDBY_CAM["pan_deg"] * math.sin(
-            2 * math.pi * time.time() / STANDBY_CAM["pan_sec"])
-        c.pitch, c.bank, c.turn_rate, c.gs_kt, c.vs_fpm = STANDBY_CAM["pitch"], 0.0, 0.0, 0.0, 0.0
-        c.view_pitch = c.pitch
+        h = math.radians(self.s["exit_gate_heading"])
+        c.x = self.gate_xz[0] + GATE_COCKPIT_B * math.sin(h)
+        c.z = self.gate_xz[1] + GATE_COCKPIT_B * math.cos(h)
+        c.y = GATE_EYE_M
+        c.heading = self.s["exit_gate_heading"]
+        c.pitch, c.bank, c.turn_rate, c.gs_kt, c.vs_fpm = 0.0, 0.0, 0.0, 0.0, 0.0
+        c.view_pitch = GATE_LOOK_UP
         c.msl_ft = (self.s["ground_msl_m"] + c.y) / 0.3048
         return None
 
@@ -326,17 +348,31 @@ class App:
             track = self.update(dt)
             self.update_lighting()
             c = self.cam
+            slant_nm = math.hypot(math.hypot(c.x, c.z), c.y) / M_PER_NM
+            self.sound.update(audio.kind_for(track.info.category if track.info else "") if track else None,
+                              slant_nm, dt)
             if self.about is not None:
                 top = self.about.copy() if self.power_dialog is not None else self.about
             else:
-                self.view.set_camera(c.x, c.y, c.z, c.heading, c.view_pitch, c.bank)
-                self.view.render(self.world)
-                if self.dither is not None:
-                    self.dither.apply()
-                blurmod.upscale(self.view.surface, self.view_big, self.blur)
-                self.draw_windshield(self.view_big, track)
-                top = self.view_big
+                if track is None and self.gate_frame is not None and time.time() - self.gate_drawn_at < GATE_REDRAW_SEC:
+                    top = self.gate_frame  # parked: nothing moves
+                else:
+                    self.view.set_camera(c.x, c.y, c.z, c.heading, c.view_pitch, c.bank)
+                    self.view.render(self.world)
+                    if track is None:
+                        gate.draw(self.view, self.gate_xz[0], self.gate_xz[1], self.s["exit_gate_heading"])
+                    if self.dither is not None:
+                        self.dither.apply()
+                    blurmod.upscale(self.view.surface, self.view_big, self.blur)
+                    self.draw_windshield(self.view_big, track)
+                    top = self.view_big
+                    if track is None:
+                        self.gate_frame, self.gate_drawn_at = self.view_big.copy(), time.time()
+                    else:
+                        self.gate_frame = None
             if self.power_dialog is not None:
+                if top is self.gate_frame:
+                    top = top.copy()
                 self.screens.draw_power_dialog(top, self.power_dialog)
             t1 = time.perf_counter()
             dist_nm = math.hypot(c.x, c.z) / M_PER_NM
@@ -368,6 +404,7 @@ class App:
             if t_end and now_wall > t_end:
                 break
             clock.tick(self.s["fps"])
+        self.sound.close()
         self.link.close()
         self.out.close()
         pygame.quit()

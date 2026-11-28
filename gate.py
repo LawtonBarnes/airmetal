@@ -27,6 +27,10 @@ YELLOW = (230, 190, 40)
 TERM_FRONT, TERM_TOP, TERM_SIDE = (196, 188, 170), (150, 146, 140), (170, 162, 148)
 GLASS = (70, 96, 120)
 GLASS_NIGHT = (255, 214, 140)  # the concourse lit from inside
+MULLION = (96, 100, 106)
+PARAPET = (128, 122, 112)
+MULLION_SPACING = 4.0
+MULLION_SPAN = 150.0  # m either side of our gate (AIR METAL's cockpit looks straight at them)
 BRIDGE = (150, 152, 158)
 FUSE, FUSE_SIDE, BELLY, TAIL, WING = (232, 232, 236), (200, 200, 206), (120, 124, 134), (60, 70, 140), (180, 182, 190)
 APRON_FLOOD = np.array((60, 52, 34), np.float32)  # sodium floodlights on the concrete at night
@@ -64,10 +68,25 @@ def _jet(ac):
     return f
 
 
-def _faces():
-    out = _box(-500, 500, TERMINAL_B, TERMINAL_B + 22, 0, 12, TERM_FRONT, TERM_SIDE, TERM_TOP)
+def _backdrop():
+    """The concourse and what's on its face, in drawing order. Every camera
+    (cockpit, cabin window) is on the apron side, below the roof, so this
+    always goes first and needs no depth sort -- sorting the 1 km wall and
+    its small mullions by their centers buried the mullions."""
+    out = _box(-500, 500, TERMINAL_B, TERMINAL_B + 22, 0, 12, TERM_FRONT, TERM_SIDE, TERM_TOP)[::-1]
     out.append(([(-500, TERMINAL_B - 0.1, 4), (500, TERMINAL_B - 0.1, 4), (500, TERMINAL_B - 0.1, 9),
                  (-500, TERMINAL_B - 0.1, 9)], GLASS))
+    out.append(([(-500, TERMINAL_B - 0.1, 10.6), (500, TERMINAL_B - 0.1, 10.6), (500, TERMINAL_B - 0.1, 12),
+                 (-500, TERMINAL_B - 0.1, 12)], PARAPET))
+    for a in np.arange(-MULLION_SPAN, MULLION_SPAN + 0.1, MULLION_SPACING):
+        out.append(([(a - 0.15, TERMINAL_B - 0.2, 4), (a + 0.15, TERMINAL_B - 0.2, 4),
+                     (a + 0.15, TERMINAL_B - 0.2, 9), (a - 0.15, TERMINAL_B - 0.2, 9)], MULLION))
+    return out
+
+
+def _faces():
+    """Jet bridges and parked jets, depth-sorted at draw time."""
+    out = []
     for k in range(-GATES, GATES + 1):
         ac = k * GATE_SPACING
         out += _box(ac - 5.5, ac - 2.5, 14, TERMINAL_B, 3.2, 6.2, BRIDGE, BRIDGE, BRIDGE)  # jet bridge
@@ -76,6 +95,7 @@ def _faces():
     return out
 
 
+BACKDROP = _backdrop()
 FACES = _faces()
 
 
@@ -87,7 +107,7 @@ def _lit(color):
         c = np.array(GLASS, np.float32) * r3.LIGHT * (1 - on) + np.array(GLASS_NIGHT, np.float32) * on
     else:
         c = np.array(color, np.float32) * r3.LIGHT
-        if color in (CONCRETE, JOINT, YELLOW):
+        if color in (CONCRETE, JOINT, YELLOW, TERM_FRONT, PARAPET, MULLION, BRIDGE):
             c = c + APRON_FLOOD * float(r3.LIGHTS_ON[0])
     return tuple(int(v) for v in np.clip(c, 0, 255))
 
@@ -135,6 +155,8 @@ def draw(view, gx, gz, heading):
     for k in range(-6, 7):
         line(k * GATE_SPACING, -45, k * GATE_SPACING, 14, yellow, 2)  # lead-in lines
     line(-500, -60, 500, -60, yellow, 2)  # taxilane
+    for pts, color in BACKDROP:
+        poly(pts, _lit(color))
     # Painter's order, farthest first.
     cam_pos = view.pos
     depth = [float(np.linalg.norm(world(pts).mean(0) - cam_pos)) for pts, _ in FACES]

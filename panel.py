@@ -9,6 +9,10 @@ data box's radio rows show the squawk, category and ICAO hex.
 
 Everything static (plates, screws, faces, ticks, labels) is drawn once
 into a background; each frame only blits it and draws the moving parts.
+
+Night mode (Panel.set_night): the white markings turn #FFA500 and the
+slate plates, bezels and screws go very dark gray -- the palette below
+is swapped and the background rebuilt.
 """
 import math
 
@@ -36,6 +40,15 @@ SKY = (42, 127, 255)
 GROUND = (140, 74, 10)
 BLACK = (0, 0, 0)
 KEY = (255, 0, 255)  # colorkey for round cut-outs
+
+_SWAPPED = ("WHITE", "LABEL", "PLATE", "PLATE_HI", "PLATE_LO", "SCREW", "SCREW_DARK", "BEZEL", "BEZEL_HI")
+DAY = {name: globals()[name] for name in _SWAPPED}
+NIGHT = {
+    "WHITE": (0xFF, 0xA5, 0x00), "LABEL": (0xFF, 0xA5, 0x00),
+    "PLATE": (22, 22, 24), "PLATE_HI": (34, 34, 36), "PLATE_LO": (10, 10, 11),
+    "SCREW": (38, 38, 40), "SCREW_DARK": (14, 14, 15),
+    "BEZEL": (18, 18, 20), "BEZEL_HI": (40, 40, 42),
+}
 
 R = 70  # gauge face radius
 VSI_SWEEP = 155  # degrees from 0 (9 o'clock) to +-2000 fpm
@@ -74,7 +87,8 @@ def _polar(c, r, deg):
     return c[0] + r * math.sin(a), c[1] - r * math.cos(a)
 
 
-def _needle(surf, c, deg, length, width, color=WHITE, tail=10):
+def _needle(surf, c, deg, length, width, color=None, tail=10):
+    color = WHITE if color is None else color
     tip = _polar(c, length, deg)
     back = _polar(c, -tail, deg)
     side_l = _polar(c, width, deg - 90)
@@ -90,9 +104,19 @@ class Panel:
         self.f_label = _font(14)
         self.f_data = _font(17)
         self.f_call = _font(22)
+        self.night = False
         self.bg = self._build_background()
         self.card = self._build_compass_card()
         self.surface = pygame.Surface((W, H))
+
+    def set_night(self, night):
+        """Day or night palette (module-wide), rebuilding what's static."""
+        if night == self.night:
+            return
+        self.night = night
+        globals().update(NIGHT if night else DAY)
+        self.bg = self._build_background()
+        self.card = self._build_compass_card()
 
     # -- static background -------------------------------------------------
 
