@@ -1,7 +1,7 @@
 """EXITROW's window overlays, from the user's Photoshop file -> exitrow_art/.
 
     python tools/build_exitrow_art.py "C:/Users/HP/Desktop/AIR METAL/WINGS-8-BIT-RETRO-OVERLAY.psd" \
-        ["C:/Users/HP/Desktop/AIR METAL/WINGS/Exit Row Decal.png"]
+        ["C:/Users/HP/Desktop/AIR METAL/SPLASH-EXIT-ROW.psd"]
 
 The PSD is 720x480, drawn as the PORT window (the starboard window is the
 same art flipped left-right at run time). Layers used:
@@ -15,9 +15,10 @@ under it). The frame comes from the jet layer's left edge, where nothing
 but frame is drawn, mirrored to the right. (Helicopters show the blades
 with no frame since 2026-11-25; frame.png is kept for trying it again.)
 
-With the second argument, splash.png: the user's 737 exit-window safety
-decal, SPLASH_SHOWN_W square pixels wide on the tube -- i.e. stretched
-720/640 into the NTSC frame, as the fleet does with square-pixel art.
+With the second argument, splash.png: the user's full-screen splash art
+(2026-11-28), the PSD's "Port" layer (4:3, logo top right) stretched to
+the 720x480 frame like AIR METAL's. Starboard flips it at run time, and
+the title + version is drawn by exitrow_screens.build_splash.
 
 Runs on the PC (needs psd-tools); the Pis only read the PNGs.
 """
@@ -29,7 +30,6 @@ from PIL import Image
 from psd_tools import PSDImage
 
 W, H = 720, 480
-SPLASH_SHOWN_W = 600
 LAYERS = {"Jet Wing": "wing_jet", "Jet Wing Red Lights": "wing_jet_lights", "Cessna Wing": "wing_cessna",
           "BLADES1": "blades1", "BLADES2": "blades2", "BLADES3": "blades3",
           "Chopper Overlay": "heli_window"}
@@ -84,9 +84,8 @@ def main():
     frame_from(found["wing_jet"]).save(os.path.join(OUT, "frame.png"))
     print("frame")
     if len(sys.argv) > 2:
-        decal = Image.open(sys.argv[2]).convert("RGB")
-        h = round(SPLASH_SHOWN_W * decal.height / decal.width)
-        decal.resize((round(SPLASH_SHOWN_W * 720 / 640), h), Image.LANCZOS).save(os.path.join(OUT, "splash.png"))
+        port = next(l for l in PSDImage.open(sys.argv[2]).descendants() if l.name == "Port")
+        port.topil().convert("RGB").resize((W, H), Image.LANCZOS).save(os.path.join(OUT, "splash.png"))
         print("splash")
 
 

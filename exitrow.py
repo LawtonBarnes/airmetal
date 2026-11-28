@@ -307,7 +307,7 @@ class App:
         self.out = output.open_output(ARGS.window, frame_size, "EXITROW")
         # Splash first, so it's up while the scenery loads.
         self.screens = exitrow_screens.Screens(frame_size, config.LOGO_PATH,
-                                               os.path.join(config.EXIT_ART_DIR, "splash.png"))
+                                               os.path.join(config.EXIT_ART_DIR, "splash.png"), self.side)
         self.out.write_frame(self.screens.build_splash(VERSION))
         splash_until = time.time() + exitrow_screens.SPLASH_SECONDS
         self.about = None  # the ABOUT canvas while it's up

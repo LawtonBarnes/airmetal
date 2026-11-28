@@ -24,7 +24,9 @@ The wall is one 1024x768 frame from a Raspberry Pi 3B+, split into four
 - **Bottom two: the instrument panel.** An analog six-pack (attitude,
   ground speed, turn coordinator, heading, altimeter, vertical speed),
   plus distance-from-the-shop and signal-strength gauges, and a data box
-  with the callsign, transponder code and aircraft category.
+  with the callsign, transponder code and aircraft category. The attitude
+  ball wears the user's dithered shading (`attitude_shade.png`) so it
+  reads as a sphere.
 
 **Time of day** follows the real sun over the Metal Shop: daylight
 (colors matched to drone photos from the shop's roof), golden hour, a
@@ -50,7 +52,10 @@ and strut for light aircraft (A1/B1/B4/B6), or rotor blades flickering
 through three frames for helicopters (A7). Starboard is the same art
 mirrored. With nothing to ride, the window shows the aircraft parked at a
 gate at Love Field (`gate.py`, modeled -- the 8 m aerial photo is mush
-from a cabin window), lit for the time of day.
+from a cabin window), lit for the time of day. The splash is the user's
+full-screen art (logo top right on port, mirrored on starboard) with
+"EXIT ROW" and the version in Fjalla One under the logo. Assigning AIR
+METAL to QUAD from SCRUTE puts EXITROW on P1 and P3 too.
 
 720x480 shown 4:3: it renders 360x240 with 8:9 pixels and pixel-doubles.
 To fit a Pi 3B+ in ~100 ms a frame: the dither and output run on a second

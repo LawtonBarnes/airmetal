@@ -3,9 +3,12 @@
 THUNDERSTRUCK / SPACE TRUCKIN per the fleet's no-shared-library
 convention; AIR METAL's own screens.py is the 2x2-wall version).
 
-Splash: the user's 737 exit-window safety decal (exitrow_art/splash.png,
-pre-stretched for the 720-wide NTSC frame by tools/build_exitrow_art.py),
-raised from center, orange VERSION underneath.
+Splash: the user's full-screen art (exitrow_art/splash.png, from
+SPLASH-EXIT-ROW.psd by tools/build_exitrow_art.py), drawn for the port
+window with the wings logo top right; starboard flips it, logo top left.
+"EXIT ROW <version>" in Fjalla One #F3E0CD is centered under the logo,
+laid out as in the PSD (1255x941): drawn at the PSD's size, then scaled
+into the 720x480 frame with the art.
 """
 import sys
 
@@ -18,9 +21,11 @@ WHITE = (255, 255, 255)
 ORANGE = (0xFF, 0xA5, 0x00)
 
 SPLASH_SECONDS = 5.0
-SPLASH_Y_OFFSET = 40
-SPLASH_VERSION_FONT_SIZE = 22
-SPLASH_VERSION_GAP = 20
+SPLASH_PSD_SIZE = (1255, 941)
+SPLASH_LOGO_CENTER_X = 905.5  # port; starboard mirrors it
+SPLASH_TITLE_TOP = 272  # top of the title's ink
+SPLASH_TITLE_FONT_SIZE = 54
+SPLASH_TITLE_COLOR = (0xF3, 0xE0, 0xCD)
 
 ABOUT_MARGIN_Y = 48
 ABOUT_LINE_GAP = 8
@@ -33,7 +38,8 @@ POWER_OPTIONS = ["NO", "YES", "RESTART"]
 
 
 class Screens:
-    def __init__(self, size, logo_path, splash_path):
+    def __init__(self, size, logo_path, splash_path, side="port"):
+        self.side = side
         self.size = size
         self.title_font = pygame.font.Font(config.FONT_PATH, TITLE_FONT_SIZE)
         self.body_font = pygame.font.Font(config.FONT_PATH, BODY_FONT_SIZE)
@@ -55,16 +61,25 @@ class Screens:
         w, h = self.size
         canvas = pygame.Surface(self.size)
         canvas.fill(BLACK)
-        vfont = pygame.font.Font(config.FONT_PATH, SPLASH_VERSION_FONT_SIZE)
-        v = vfont.render(f"VERSION {version}", True, ORANGE)
         try:
             img = pygame.image.load(self.splash_path)
         except (pygame.error, OSError) as exc:
             print(f"Splash load failed: {exc}", file=sys.stderr)
-            img = self.title_font.render("EXITROW", True, ORANGE)
-        img_y = (h - img.get_height()) // 2 - SPLASH_Y_OFFSET
-        canvas.blit(img, ((w - img.get_width()) // 2, img_y))
-        canvas.blit(v, ((w - v.get_width()) // 2, img_y + img.get_height() + SPLASH_VERSION_GAP))
+            img = None
+        if img is not None:
+            if img.get_size() != self.size:
+                img = pygame.transform.smoothscale(img, self.size)
+            if self.side == "starboard":
+                img = pygame.transform.flip(img, True, False)
+            canvas.blit(img, (0, 0))
+        sx, sy = w / SPLASH_PSD_SIZE[0], h / SPLASH_PSD_SIZE[1]
+        font = pygame.font.Font(config.SPLASH_FONT_PATH, SPLASH_TITLE_FONT_SIZE)
+        title = font.render(f"EXIT ROW {version}", True, SPLASH_TITLE_COLOR)
+        ink = title.get_bounding_rect()
+        title = title.subsurface(ink)
+        title = pygame.transform.smoothscale(title, (round(ink.w * sx), round(ink.h * sy)))
+        cx = SPLASH_LOGO_CENTER_X if self.side != "starboard" else SPLASH_PSD_SIZE[0] - SPLASH_LOGO_CENTER_X
+        canvas.blit(title, (round(cx * sx - title.get_width() / 2), round(SPLASH_TITLE_TOP * sy)))
         return canvas
 
     def build_about(self, title, rows):

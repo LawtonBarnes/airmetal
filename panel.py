@@ -108,6 +108,11 @@ class Panel:
         self.bg = self._build_background()
         self.card = self._build_compass_card()
         self.surface = pygame.Surface((W, H))
+        try:
+            self.att_shade = pygame.image.load(config.ATTITUDE_SHADE_PATH)
+        except (pygame.error, OSError, FileNotFoundError) as exc:
+            print(f"attitude shading not loaded: {exc}")
+            self.att_shade = None
 
     def set_night(self, night):
         """Day or night palette (module-wide), rebuilding what's static."""
@@ -266,6 +271,12 @@ class Panel:
         ball.blit(mask, (0, 0))
         ball.set_colorkey((255, 0, 255))
         s.blit(ball, (c[0] - R, c[1] - R))
+        pygame.draw.circle(s, (60, 60, 60), (c[0], c[1] + R - 10), 6)
+        # The user's dithered shading (airmetal_night_flight.psd, 2026-11-28):
+        # black dots, denser toward the rim, so the ball reads as a sphere.
+        # Fixed to the case; the markers go over it, unshaded.
+        if self.att_shade is not None:
+            s.blit(self.att_shade, (c[0] - R, c[1] - R))
         # Bank pointer + fixed airplane symbol.
         tip = _polar(c, R - 4, -bank)
         pygame.draw.polygon(s, WHITE, [tip, _polar(c, R - 14, -bank - 5), _polar(c, R - 14, -bank + 5)])
@@ -273,7 +284,6 @@ class Panel:
         pygame.draw.line(s, YELLOW, (c[0] - 44, c[1]), (c[0] - 14, c[1]), 4)
         pygame.draw.line(s, YELLOW, (c[0] + 14, c[1]), (c[0] + 44, c[1]), 4)
         pygame.draw.circle(s, YELLOW, c, 4)
-        pygame.draw.circle(s, (60, 60, 60), (c[0], c[1] + R - 10), 6)
 
     def _turn_coordinator(self, s, c, turn_rate):
         tilt = max(-30.0, min(30.0, turn_rate / 3.0 * 20.0))  # standard rate (3 deg/s) = the 20 deg mark
