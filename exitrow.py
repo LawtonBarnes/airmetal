@@ -13,9 +13,12 @@ bank tips the window up or down, its pitch tilts the horizon.
 
 Over the 3D view goes the user's window art (exitrow_art/, built from
 the PSD by tools/build_exitrow_art.py): a jet wing, a Cessna's high wing
-and strut for light aircraft, or rotor blades flickering through three
-frames for helicopters (no window frame: user, 2026-11-25). The art is drawn as the port window; starboard
-is the same art mirrored.
+and strut for light aircraft, or for helicopters rotor blades
+flickering through three frames under the user's chopper window matte
+(heli_window.png, from CHOPPER-WINDOW-MATTE-W-SLIDE.png, alpha cut at
+50% for a colorkey blit). The art is drawn as the port window;
+starboard is the same art mirrored. The wings are tinted with the sky's
+color as the light changes, down to dark gray at night (tint_wing).
 
 With nothing to ride (AIR METAL in standby, or not running), the window
 shows the aircraft parked at a gate (gate.py).
@@ -69,6 +72,7 @@ if ARGS.headless:
 if not ARGS.window or ARGS.headless:
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
+import numpy as np  # noqa: E402
 import pygame  # noqa: E402
 
 import director as directormod  # noqa: E402
@@ -91,6 +95,9 @@ LINK_POLL_SEC = 1.0
 LINK_TIMEOUT_SEC = 6.0  # no answer from AIR METAL this long: it's not there
 EXIT_GOTO_HOME = 42  # see STRINGS/SCRUTE: Home hands off to the app menu
 COLORKEY = (255, 0, 255)
+TINTED_ART = ("wing_jet", "wing_cessna")
+WING_SKY_TINT = 0.5  # how far the wings take on the sky's hue (0 = none, 1 = multiplied by it)
+WING_NIGHT_GRAY = 0.3  # the darkest the wings get: dark gray, not black
 NOTE_FG, NOTE_EDGE = (255, 220, 0), (255, 165, 0)
 
 
@@ -139,6 +146,38 @@ def load_overlay(name, flip):
     surf = pygame.Surface(img.get_size())
     surf.fill(COLORKEY)
     surf.blit(img, (0, 0))
+    surf.set_colorkey(COLORKEY)
+    return surf
+
+
+def load_art_source(name, flip):
+    """(rgb float32 (w, h, 3), alpha mask (w, h)) of an art PNG, for tint_wing."""
+    img = pygame.image.load(os.path.join(config.EXIT_ART_DIR, name + ".png"))
+    if flip:
+        img = pygame.transform.flip(img, True, False)
+    return pygame.surfarray.array3d(img).astype(np.float32), pygame.surfarray.array_alpha(img) > 0
+
+
+def wing_tint(lighting):
+    """RGB multiplier for the wings: the sky's average hue (at WING_SKY_TINT
+    strength) times the scene's light, floored at WING_NIGHT_GRAY -- and
+    going neutral toward that floor, so night is a dark gray, not a dark blue."""
+    day_sky = np.array(render3d._sky_palette(64), np.float32)
+    sky = lighting.sky_lut(day_sky, 16, 64, math.sin(math.radians(render3d.SKY_TOP_DEG))).mean(axis=(0, 1))
+    hue = sky / max(float(sky.max()), 1.0)
+    level = float(np.mean(lighting.light))
+    bright = np.maximum(np.asarray(lighting.light, np.float32), WING_NIGHT_GRAY)  # warm at sunset
+    strength = WING_SKY_TINT * min(max((level - 0.15) / 0.45, 0.0), 1.0)  # full until dusk, none at night
+    return (1 - strength + strength * hue) * bright
+
+
+def tint_wing(src, tint):
+    """A colorkeyed overlay surface: the art's pixels times `tint`."""
+    rgb, mask = src
+    out = np.empty_like(rgb, dtype=np.uint8)
+    out[:] = COLORKEY
+    out[mask] = np.clip(rgb[mask] * tint, 0, 255).astype(np.uint8)
+    surf = pygame.surfarray.make_surface(out)
     surf.set_colorkey(COLORKEY)
     return surf
 
@@ -284,15 +323,15 @@ class App:
             self.view.set_props(windsock.build(self.s["windsock_height_m"], self.s["windsock_wind_from"]))
         flip = self.side == "starboard"
         self.art = {k: load_overlay(k, flip) for k in
-                    ("wing_jet", "wing_cessna", "frame", "blades1", "blades2", "blades3")}
+                    ("wing_jet", "wing_cessna", "heli_window", "blades1", "blades2", "blades3")}
+        self.art_src = {k: load_art_source(k, flip) for k in TINTED_ART}
         # What each kind of window hides of the view (blades flicker, so only
-        # the frame counts for helicopters).
+        # the window matte counts for helicopters).
         view_size = (config.EXIT_VIEW_W, config.EXIT_VIEW_H)
         self.hidden = {kind: hidden_mask(names, view_size) for kind, names in
-                       (("jet", ["wing_jet"]), ("cessna", ["wing_cessna"]))}
+                       (("jet", ["wing_jet"]), ("cessna", ["wing_cessna"]), ("heli", ["heli_window"]))}
         if flip:
             self.hidden = {k: m[:, ::-1].copy() for k, m in self.hidden.items()}
-        self.hidden["heli"] = None  # blades only, and they flicker
         self.hidden_kind = None
         self.blade_i = 0
         self.presenter = Presenter(self.out, view_size, (config.EXIT_FRAME_W, config.EXIT_FRAME_H),
@@ -391,7 +430,16 @@ class App:
             lt = time.localtime(now)
             t = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, hh, mm, 0, 0, 0, -1))
         elev, az = daylight.sun_position(t, self.s["lat"], self.s["lon"])
-        self.view.set_lighting(daylight.lighting_at(elev, az), self.world)
+        lighting = daylight.lighting_at(elev, az)
+        self.view.set_lighting(lighting, self.world)
+        # Fresh surfaces swapped in whole, so the presenter thread never
+        # blits a half-tinted wing.
+        tint = wing_tint(lighting)
+        last = getattr(self, "wing_tint", None)
+        if last is None or np.abs(tint - last).max() > 0.004:  # all day long it doesn't change
+            self.wing_tint = tint
+            for name in TINTED_ART:
+                self.art[name] = tint_wing(self.art_src[name], tint)
 
     # -- what to show ------------------------------------------------------
 
@@ -449,7 +497,7 @@ class App:
                              -self.s["exit_look_down"] - self.sgn * c.bank, self.sgn * c.pitch)
         self.view.render(self.world)
         if kind == "heli":
-            overlays = [self.art[f"blades{self.blade_i + 1}"]]
+            overlays = [self.art[f"blades{self.blade_i + 1}"], self.art["heli_window"]]
             self.blade_i = (self.blade_i + 1) % 3
         else:
             overlays = [self.art["wing_cessna" if kind == "cessna" else "wing_jet"]]
