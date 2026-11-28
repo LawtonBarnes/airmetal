@@ -432,14 +432,19 @@ class App:
         elev, az = daylight.sun_position(t, self.s["lat"], self.s["lon"])
         lighting = daylight.lighting_at(elev, az)
         self.view.set_lighting(lighting, self.world)
-        # Fresh surfaces swapped in whole, so the presenter thread never
-        # blits a half-tinted wing.
         tint = wing_tint(lighting)
         last = getattr(self, "wing_tint", None)
         if last is None or np.abs(tint - last).max() > 0.004:  # all day long it doesn't change
             self.wing_tint = tint
-            for name in TINTED_ART:
-                self.art[name] = tint_wing(self.art_src[name], tint)
+            self.wing_tinted = {}  # retinted on next use, only the wing on screen (~75 ms each on a 3B+)
+
+    def wing(self, name):
+        """A wing overlay in the current sky tint. A fresh surface is swapped
+        in whole, so the presenter thread never blits a half-tinted wing."""
+        if not self.wing_tinted.get(name):
+            self.art[name] = tint_wing(self.art_src[name], self.wing_tint)
+            self.wing_tinted[name] = True
+        return self.art[name]
 
     # -- what to show ------------------------------------------------------
 
@@ -500,7 +505,7 @@ class App:
             overlays = [self.art[f"blades{self.blade_i + 1}"], self.art["heli_window"]]
             self.blade_i = (self.blade_i + 1) % 3
         else:
-            overlays = [self.art["wing_cessna" if kind == "cessna" else "wing_jet"]]
+            overlays = [self.wing("wing_cessna" if kind == "cessna" else "wing_jet")]
         self.presenter.submit(self.view.surface, overlays)
         self.gate_ready = False
 
@@ -519,7 +524,7 @@ class App:
         self.view.set_camera(x, gate.WINDOW_HEIGHT_M, z, (heading + self.sgn * 90) % 360, -GATE_LOOK_DOWN, 0.0)
         self.view.render(self.world)
         gate.draw(self.view, gx, gz, heading)
-        self.presenter.submit(self.view.surface, [self.art["wing_jet"]], self.note(), keep=True)
+        self.presenter.submit(self.view.surface, [self.wing("wing_jet")], self.note(), keep=True)
         self.gate_ready = True
         self.gate_drawn_at = now
 
