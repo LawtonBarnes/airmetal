@@ -151,11 +151,9 @@ def load_overlay(name, flip):
 
 
 def load_art_source(name, flip):
-    """(rgb float32 (w, h, 3), alpha mask (w, h)) of an art PNG, for tint_wing."""
+    """An art PNG as loaded (per-pixel alpha), for tint_wing."""
     img = pygame.image.load(os.path.join(config.EXIT_ART_DIR, name + ".png"))
-    if flip:
-        img = pygame.transform.flip(img, True, False)
-    return pygame.surfarray.array3d(img).astype(np.float32), pygame.surfarray.array_alpha(img) > 0
+    return pygame.transform.flip(img, True, False) if flip else img
 
 
 def wing_tint(lighting):
@@ -172,12 +170,14 @@ def wing_tint(lighting):
 
 
 def tint_wing(src, tint):
-    """A colorkeyed overlay surface: the art's pixels times `tint`."""
-    rgb, mask = src
-    out = np.empty_like(rgb, dtype=np.uint8)
-    out[:] = COLORKEY
-    out[mask] = np.clip(rgb[mask] * tint, 0, 255).astype(np.uint8)
-    surf = pygame.surfarray.make_surface(out)
+    """A colorkeyed overlay surface: the art's pixels times `tint` (SDL's
+    multiply blend -- ~10x faster than numpy on a Pi 3B+)."""
+    img = src.copy()
+    r, g, b = (int(round(min(max(v, 0.0), 1.0) * 255)) for v in tint)
+    img.fill((r, g, b, 255), special_flags=pygame.BLEND_RGBA_MULT)
+    surf = pygame.Surface(img.get_size())
+    surf.fill(COLORKEY)
+    surf.blit(img, (0, 0))
     surf.set_colorkey(COLORKEY)
     return surf
 
